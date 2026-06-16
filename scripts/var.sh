@@ -7,7 +7,7 @@ source "${PROJECT_DIR}/.venv/bin/activate"
 MODEL_TYPE="mrad-clip"
 
 # Path configuration
-CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}"
+CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}-cluster-memory"
 LOG_DIR="${PROJECT_DIR}/logs/released_${MODEL_TYPE}"
 CACHE_DIR="${PROJECT_DIR}/cache copy"
 TRAIN_SCRIPT="${PROJECT_DIR}/train.py"
