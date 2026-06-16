@@ -61,7 +61,7 @@ for i in $(seq 1 $BATCH_SIZE); do
 
     # 执行测试脚本
     python $TEST_SCRIPT \
-      --model_type "mrad-clip" \
+      --model_type $MODEL_TYPE \
       --dataset "$TEST_DATASET" \
       --data_path "$TEST_DATA_PATH" \
       --cache_dir "$CACHE_DIR" \
