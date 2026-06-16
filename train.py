@@ -269,7 +269,7 @@ if __name__ == '__main__':
                         help='Model type to train: mrad-ft or mrad-clip')
     parser.add_argument("--ft_epochs", type=int, default=1, help="epochs for FT stage (patch_proj training)")
     parser.add_argument("--clip_epochs", type=int, default=5, help="epochs for CLIP stage (prompt_learner + prompt_proj training)")
-    parser.add_argument("--learning_rate", type=float, default=0.0004, help="learning rate")
+    parser.add_argument("--learning_rate", type=float, default=0.0005, help="learning rate")
     parser.add_argument("--batch_size", type=int, default=8, help="batch size")
     parser.add_argument("--image_size", type=int, default=518, help="image size")
     parser.add_argument("--print_freq", type=int, default=1, help="print frequency")
