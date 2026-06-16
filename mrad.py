@@ -50,120 +50,96 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
 def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cache=None,
                             device=None, dir=None, k=8, max_samples=50000):
     """
-    Build patch-level Memory Bank via KMeans clustering.
+    Build patch-level Memory Bank via per-image KMeans clustering.
 
-    Replaces the original per-image mean pooling with a two-pass KMeans approach:
-    1. Collect all normal / anomaly patch features across the entire training set.
-    2. Run KMeans separately on each class to obtain k cluster centers.
-    3. The resulting (2k, 768) keys and (2k, 2) one-hot labels are backward
-       compatible with ``compute_patch_socre`` — no downstream changes needed.
+    For each training image, KMeans is run separately on anomaly and normal
+    patch features.  This preserves per-image specificity while capturing
+    intra-image diversity through multiple cluster centres.
 
     Parameters
     ----------
     k : int
-        Number of prototypes per class (default 8 → 16 total).
+        Number of prototypes per class per image (default 8).
+        Total bank size ≤ N_images × 2 × k.
     max_samples : int
-        Max number of patches fed to KMeans per class for efficiency.
+        Max normal patches fed to KMeans per image (rarely triggered since
+        per-image patch count is ~1369 by default).
     """
     cache_dir = dir
     if load_cache == False:
         with torch.no_grad():
-            # ----------------------------------------------------------------
-            # Pass 1: collect ALL patch features, separated by class
-            # ----------------------------------------------------------------
-            pos_feats_all = []   # anomaly patches  (each: n_pos_i, 768)
-            neg_feats_all = []   # normal patches   (each: n_neg_i, 768)
+            train_features = []
+            train_labels = []
 
-            for items in tqdm(train_loader_cache, desc="Collecting patches"):
+            for items in tqdm(train_loader_cache, desc="Per-image KMeans cache"):
                 images = items['img'].to(device)
                 gt = items['img_mask'].to(device)
                 if gt.dim() == 4:
-                    gt = gt.squeeze(1)  # remove channel dim: (B, 1, H, W) -> (B, H, W)
+                    gt = gt.squeeze(1)          # (B, 1, H, W) → (B, H, W)
                 gt[gt > 0.5] = 1
                 gt[gt <= 0.5] = 0
                 _, patch_features, _, _ = clip_model.encode_image(
                     images, [6, 12, 18, 24], DPAM_layer=24
                 )
-                patch_feature = patch_features[3]
+                patch_feature = patch_features[3]        # (B, 1369, 768)
                 patch_feature = average_neighbor(patch_feature)
 
                 gt_resized = F.interpolate(
                     gt.unsqueeze(1), size=(37, 37),
                     mode='bilinear', align_corners=False
-                ).squeeze(1)  # (B, 37, 37)
+                ).squeeze(1)                              # (B, 37, 37)
 
                 for i in range(images.size(0)):
-                    patch = patch_feature[i]          # (1369, 768)
-                    patch = patch.view(37, 37, -1)    # (37, 37, 768)
-                    mask = gt_resized[i]              # (37, 37)
+                    patch = patch_feature[i]              # (1369, 768)
+                    patch = patch.view(37, 37, -1)        # (37, 37, 768)
+                    mask = gt_resized[i]                  # (37, 37)
 
                     pos_mask = (mask == 1)
                     neg_mask = (mask == 0)
 
+                    # ---- anomaly cluster centres (label = 1) ----
                     if pos_mask.sum() > 0:
-                        pos_feats_all.append(patch[pos_mask].cpu())   # (*, 768) on CPU
+                        pos_feats = patch[pos_mask].cpu()       # (n_pos, 768)
+                        actual_k_pos = min(k, pos_feats.shape[0])
+                        pos_norm = pos_feats / (pos_feats.norm(dim=-1, keepdim=True) + 1e-8)
+
+                        if actual_k_pos >= 2:
+                            km = KMeans(n_clusters=actual_k_pos,
+                                        random_state=42, n_init='auto')
+                            km.fit(pos_norm.numpy())
+                            centers = torch.from_numpy(km.cluster_centers_).float()
+                        else:
+                            centers = pos_norm                 # single-point → itself
+
+                        centers = centers / (centers.norm(dim=-1, keepdim=True) + 1e-8)
+                        train_features.append(centers.to(device))
+                        train_labels.append(
+                            torch.ones(centers.shape[0], dtype=torch.int64, device=device)
+                        )
+
+                    # ---- normal cluster centres (label = 0) ----
                     if neg_mask.sum() > 0:
-                        neg_feats_all.append(patch[neg_mask].cpu())   # (*, 768) on CPU
+                        neg_feats = patch[neg_mask].cpu()       # (n_neg, 768)
+                        if neg_feats.shape[0] > max_samples:
+                            idx = np.random.choice(neg_feats.shape[0],
+                                                   max_samples, replace=False)
+                            neg_feats = neg_feats[idx]
+                        actual_k_neg = min(k, neg_feats.shape[0])
+                        neg_norm = neg_feats / (neg_feats.norm(dim=-1, keepdim=True) + 1e-8)
 
-            # ----------------------------------------------------------------
-            # Pass 2: KMeans clustering per class → cluster centers as prototypes
-            # ----------------------------------------------------------------
-            train_features = []
-            train_labels = []
+                        if actual_k_neg >= 2:
+                            km = KMeans(n_clusters=actual_k_neg,
+                                        random_state=42, n_init='auto')
+                            km.fit(neg_norm.numpy())
+                            centers = torch.from_numpy(km.cluster_centers_).float()
+                        else:
+                            centers = neg_norm
 
-            # ---- anomaly prototypes (label = 1) ----
-            if len(pos_feats_all) > 0:
-                pos_cat = torch.cat(pos_feats_all, dim=0)  # (total_pos, 768)
-                actual_k_pos = min(k, pos_cat.shape[0])
-                print(f"[KMeans] Anomaly patches: {pos_cat.shape[0]}, "
-                      f"clustering into {actual_k_pos} centers")
-
-                if pos_cat.shape[0] > max_samples:
-                    idx = np.random.choice(pos_cat.shape[0], max_samples, replace=False)
-                    pos_cat = pos_cat[idx]
-
-                # L2-normalize before clustering (spherical KMeans approximation)
-                pos_cat_norm = pos_cat / pos_cat.norm(dim=-1, keepdim=True)
-                kmeans_pos = KMeans(
-                    n_clusters=actual_k_pos, random_state=42, n_init='auto'
-                )
-                kmeans_pos.fit(pos_cat_norm.cpu().numpy())
-                centers_pos = torch.from_numpy(
-                    kmeans_pos.cluster_centers_
-                ).float().to(device)
-                centers_pos = centers_pos / centers_pos.norm(dim=-1, keepdim=True)
-
-                train_features.append(centers_pos)  # (actual_k_pos, 768)
-                train_labels.append(
-                    torch.ones(actual_k_pos, dtype=torch.int64, device=device)
-                )
-
-            # ---- normal prototypes (label = 0) ----
-            if len(neg_feats_all) > 0:
-                neg_cat = torch.cat(neg_feats_all, dim=0)  # (total_neg, 768)
-                actual_k_neg = min(k, neg_cat.shape[0])
-                print(f"[KMeans] Normal patches: {neg_cat.shape[0]}, "
-                      f"clustering into {actual_k_neg} centers")
-
-                if neg_cat.shape[0] > max_samples:
-                    idx = np.random.choice(neg_cat.shape[0], max_samples, replace=False)
-                    neg_cat = neg_cat[idx]
-
-                # L2-normalize before clustering (spherical KMeans approximation)
-                neg_cat_norm = neg_cat / neg_cat.norm(dim=-1, keepdim=True)
-                kmeans_neg = KMeans(
-                    n_clusters=actual_k_neg, random_state=42, n_init='auto'
-                )
-                kmeans_neg.fit(neg_cat_norm.cpu().numpy())
-                centers_neg = torch.from_numpy(
-                    kmeans_neg.cluster_centers_
-                ).float().to(device)
-                centers_neg = centers_neg / centers_neg.norm(dim=-1, keepdim=True)
-
-                train_features.append(centers_neg)  # (actual_k_neg, 768)
-                train_labels.append(
-                    torch.zeros(actual_k_neg, dtype=torch.int64, device=device)
-                )
+                        centers = centers / (centers.norm(dim=-1, keepdim=True) + 1e-8)
+                        train_features.append(centers.to(device))
+                        train_labels.append(
+                            torch.zeros(centers.shape[0], dtype=torch.int64, device=device)
+                        )
 
             if len(train_features) == 0:
                 raise RuntimeError(
@@ -174,9 +150,11 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
             raw_labels = torch.cat(train_labels, dim=0).to(torch.int64)
             cache_values = F.one_hot(raw_labels, num_classes=2).float().to(device)
 
+            n_pos = (raw_labels == 1).sum().item()
+            n_neg = (raw_labels == 0).sum().item()
             print(f"[KMeans] Memory Bank built: {cache_keys.shape[0]} prototypes "
-                  f"(→ keys {list(cache_keys.shape)}, "
-                  f"values {list(cache_values.shape)})")
+                  f"(anomaly={n_pos}, normal={n_neg}) "
+                  f"→ keys {list(cache_keys.shape)}, values {list(cache_values.shape)}")
 
         cache_dict = {"keys": cache_keys, "values": cache_values}
         torch.save(
