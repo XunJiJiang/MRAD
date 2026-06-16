@@ -15,10 +15,12 @@ import time
 import random
 import numpy as np
 from tabulate import tabulate
-from mrad import build_cache_model,compute_socre,compute_patch_socre,build_patch_cache_model,similarity_experiment
+from mrad import build_cache_model,compute_socre,compute_patch_socre,build_patch_cache_model# ,similarity_experiment
 from utils.visualization import visualizer
 from utils.metrics import image_level_metrics, pixel_level_metrics
 from scipy.ndimage import gaussian_filter
+
+import csv
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -89,7 +91,7 @@ def test(args):
 
     # Only mrad-clip and mrad-ft need to load weights
     if model_type in ['mrad-clip', 'mrad-ft']:
-        checkpoint = torch.load(args.checkpoint_path)
+        checkpoint = torch.load(args.checkpoint_path, map_location="cpu")
         image_proj.load_state_dict(checkpoint["image_proj"])
         image_proj.to(device)
         patch_proj.load_state_dict(checkpoint["patch_proj"])
@@ -246,6 +248,9 @@ def test(args):
 
         table_ls.append(table)
 
+    # 根据 objects 的字母顺序对 table_ls 进行排序
+    table_ls.sort(key=lambda x: x[0])
+
     if args.metrics == 'image-level':
         # logger
         table_ls.append(['mean', 
@@ -276,14 +281,37 @@ def test(args):
         table_ls.append(mean_row)
         results = tabulate(table_ls, headers=headers, tablefmt="pipe")
     logger.info("\n%s", results)
+    # 将 results 保存到 "save_path"/log-"model_index".txt
+    with open(os.path.join(args.save_path, f'log-{args.model_index}.txt'), 'w') as f:
+        f.write(results)
+
+    # 将table_ls保存到 "save_path"/log-"model_index".csv
+    with open(os.path.join(args.save_path, f'log-{args.model_index}.csv'), 'w', newline='') as f:
+        writer = csv.writer(f)
+        if args.metrics == 'image-level':
+            writer.writerow(['objects', 'image_auroc', 'image_ap'])
+        elif args.metrics == 'pixel-level':
+            headers = ['objects', 'pixel_auroc']
+            if compute_pixel_aupro and pixel_aupro_list:
+                headers.append('pixel_aupro')
+            writer.writerow(headers)
+        elif args.metrics == 'image-pixel-level':
+            headers = ['objects', 'pixel_auroc']
+            if compute_pixel_aupro and pixel_aupro_list:
+                headers.append('pixel_aupro')
+            headers.extend(['image_auroc', 'image_ap'])
+            writer.writerow(headers)
+        for row in table_ls:
+            writer.writerow(row)
+    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("MRAD Testing", add_help=True)
     # Paths
-    parser.add_argument("--data_path", type=str, default="./data/MVTEC", help="path to test dataset")
+    parser.add_argument("--data_path", type=str, default="/home/ts-cjh/Data/MRAD/data/mvtec_anomaly_detection", help="path to test dataset")
     parser.add_argument("--save_path", type=str, default='./results/test_on_mvtec', help='path to save results')
     parser.add_argument("--checkpoint_path", type=str,
-        default='./checkpoints/test_on_mvtec.pth', help='path to checkpoint')
+        default='./checkpoints/released/mrad_clip_final.pth', help='path to checkpoint')
     parser.add_argument("--cache_dir", type=str, default='./cache', help='directory for cache files')
     # Model parameters
     parser.add_argument("--dataset", type=str, default='mvtec')
@@ -303,6 +331,10 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default='mrad-clip',
         choices=['mrad-clip', 'mrad-ft', 'mrad-tf'],
         help='Model type: mrad-clip (full), mrad-ft (fine-tuned), mrad-tf (train-free)')
+
+    # 模型索引
+    parser.add_argument("--model_index", type=int, default=0, help="model index for logging")
+
     args = parser.parse_args()
     print(args)
     setup_seed(args.seed)

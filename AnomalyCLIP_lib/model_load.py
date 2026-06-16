@@ -36,7 +36,7 @@ def _download(
 
     if not cache_dir:
         # cache_dir = os.path.expanduser("~/.cache/clip")
-        cache_dir = os.path.expanduser("/root/data/xcr3/projects/AnomalyCLIP-main/checkpoint")
+        cache_dir = os.path.expanduser("/home/ts-cjh/Code/MRAD/checkpoint")
     os.makedirs(cache_dir, exist_ok=True)
     filename = os.path.basename(url)
 
@@ -143,7 +143,7 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     print("name", name)
     if name in _MODELS:
         # model_path = _download(_MODELS[name], download_root or os.path.expanduser("~/.cache/clip"))
-        model_path = _download(_MODELS[name], download_root or os.path.expanduser("/root/data/xcr3/projects/AnomalyCLIP-main/checkpoint"))
+        model_path = _download(_MODELS[name], download_root or os.path.expanduser("/home/ts-cjh/Code/MRAD/checkpoint"))
     elif os.path.isfile(name):
         model_path = name
     else:

@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+cache/
+cache copy/
+checkpoint/
+checkpoint copy/
+checkpoints/
+checkpoints copy/
+results/

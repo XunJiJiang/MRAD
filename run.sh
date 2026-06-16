@@ -24,9 +24,9 @@ TEST_SCRIPT="${PROJECT_DIR}/test.py"
 
 # Dataset configuration (users should modify these paths)
 TRAIN_DATASET="visa"
-TRAIN_DATA_PATH="${PROJECT_DIR}/data/VISA"
+TRAIN_DATA_PATH="/home/ts-cjh/Data/MRAD/data/spot-diff/data"
 TEST_DATASET="mvtec"
-TEST_DATA_PATH="${PROJECT_DIR}/data/MVTEC"
+TEST_DATA_PATH="/home/ts-cjh/Data/MRAD/data/mvtec_anomaly_detection"
 
 # Training GPU
 TRAIN_GPU="cuda:1"
@@ -85,7 +85,7 @@ if [ "$MODEL_TYPE" == "mrad-ft" ]; then
         --data_path "$TEST_DATA_PATH" \
         --cache_dir "$CACHE_DIR" \
         --save_path "${LOG_DIR}/results" \
-        --device "cuda:0" \
+        --device "cuda:1" \
         2>&1 | tee "$LOG_FILE"
 
     echo "MRAD-FT testing completed."
@@ -94,8 +94,8 @@ else
     # MRAD-CLIP trains 6 epochs, test all epochs (distributed across multiple GPUs)
     echo "Testing MRAD-CLIP (epochs 1-6 in parallel)..."
 
-    # cuda:0: epoch 1, 5
-    for epoch in 1 5; do
+    # cuda:0: epoch 1, 3, 5
+    for epoch in 1 3 5; do
         GPU_ID="cuda:0"
         CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
         LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
@@ -125,8 +125,8 @@ else
         fi
     done
 
-    # cuda:1: epoch 2, 6
-    for epoch in 2 6; do
+    # cuda:1: epoch 2, 4, 6
+    for epoch in 2 4 6; do
         GPU_ID="cuda:1"
         CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
         LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
@@ -143,41 +143,41 @@ else
             > "$LOG_FILE" 2>&1 &
     done
 
-    # cuda:2: epoch 3
-    for epoch in 3; do
-        GPU_ID="cuda:2"
-        CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
-        LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
+    # # cuda:2: epoch 3
+    # for epoch in 3; do
+    #     GPU_ID="cuda:2"
+    #     CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
+    #     LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
 
-        echo "Running test for epoch ${epoch} on ${GPU_ID} (mrad-clip mode)..."
-        nohup python $TEST_SCRIPT \
-            --model_type "mrad-clip" \
-            --checkpoint_path "$CHECKPOINT_PATH" \
-            --dataset "$TEST_DATASET" \
-            --data_path "$TEST_DATA_PATH" \
-            --cache_dir "$CACHE_DIR" \
-            --save_path "${LOG_DIR}/results_epoch_${epoch}" \
-            --device "$GPU_ID" \
-            > "$LOG_FILE" 2>&1 &
-    done
+    #     echo "Running test for epoch ${epoch} on ${GPU_ID} (mrad-clip mode)..."
+    #     nohup python $TEST_SCRIPT \
+    #         --model_type "mrad-clip" \
+    #         --checkpoint_path "$CHECKPOINT_PATH" \
+    #         --dataset "$TEST_DATASET" \
+    #         --data_path "$TEST_DATA_PATH" \
+    #         --cache_dir "$CACHE_DIR" \
+    #         --save_path "${LOG_DIR}/results_epoch_${epoch}" \
+    #         --device "$GPU_ID" \
+    #         > "$LOG_FILE" 2>&1 &
+    # done
 
-    # cuda:3: epoch 4
-    for epoch in 4; do
-        GPU_ID="cuda:3"
-        CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
-        LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
+    # # cuda:3: epoch 4
+    # for epoch in 4; do
+    #     GPU_ID="cuda:3"
+    #     CHECKPOINT_PATH="${CHECKPOINT_DIR}/mrad_clip_epoch_${epoch}.pth"
+    #     LOG_FILE="${LOG_DIR}/test_epoch_${epoch}.log"
 
-        echo "Running test for epoch ${epoch} on ${GPU_ID} (mrad-clip mode)..."
-        nohup python $TEST_SCRIPT \
-            --model_type "mrad-clip" \
-            --checkpoint_path "$CHECKPOINT_PATH" \
-            --dataset "$TEST_DATASET" \
-            --data_path "$TEST_DATA_PATH" \
-            --cache_dir "$CACHE_DIR" \
-            --save_path "${LOG_DIR}/results_epoch_${epoch}" \
-            --device "$GPU_ID" \
-            > "$LOG_FILE" 2>&1 &
-    done
+    #     echo "Running test for epoch ${epoch} on ${GPU_ID} (mrad-clip mode)..."
+    #     nohup python $TEST_SCRIPT \
+    #         --model_type "mrad-clip" \
+    #         --checkpoint_path "$CHECKPOINT_PATH" \
+    #         --dataset "$TEST_DATASET" \
+    #         --data_path "$TEST_DATA_PATH" \
+    #         --cache_dir "$CACHE_DIR" \
+    #         --save_path "${LOG_DIR}/results_epoch_${epoch}" \
+    #         --device "$GPU_ID" \
+    #         > "$LOG_FILE" 2>&1 &
+    # done
 
     echo "All tests launched in background."
 fi

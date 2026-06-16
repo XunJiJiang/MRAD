@@ -47,5 +47,5 @@ class MVTecSolver(object):
             f.write(json.dumps(info, indent=4) + "\n")
         print('normal_samples', normal_samples, 'anomaly_samples', anomaly_samples)
 if __name__ == '__main__':
-    runner = MVTecSolver(root='/root/data/xcr3/datasets/mvtec_anomaly_detection')
+    runner = MVTecSolver(root='/home/ts-cjh/Data/MRAD/data/mvtec_anomaly_detection')
     runner.run()

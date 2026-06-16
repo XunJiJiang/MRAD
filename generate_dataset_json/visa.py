@@ -50,5 +50,5 @@ class VisASolver(object):
 
 
 if __name__ == '__main__':
-    runner = VisASolver(root='/root/data/xcr3/datasets/VisA_20220922')
+    runner = VisASolver(root='/home/ts-cjh/Data/MRAD/data/spot-diff/data')
     runner.run()

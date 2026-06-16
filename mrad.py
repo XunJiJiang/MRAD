@@ -37,10 +37,10 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
             "values": cache_values
         }
 
-        torch.save(cache_dict, cache_dir)
+        torch.save({"keys": cache_keys.cpu(), "values": cache_values.cpu()}, cache_dir)
 
     else:
-        cache_dict = torch.load(cache_dir)
+        cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
     return cache_keys, cache_values
@@ -100,10 +100,10 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             "values": cache_values
         }
 
-        torch.save(cache_dict, cache_dir)
+        torch.save({"keys": cache_keys.cpu(), "values": cache_values.cpu()}, cache_dir)
 
     else:
-        cache_dict = torch.load(cache_dir)
+        cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
     return cache_keys, cache_values

@@ -252,7 +252,7 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("MRAD Training", add_help=True)
     # Data paths
-    parser.add_argument("--data_path", type=str, default="./data/VISA", help="train dataset path")
+    parser.add_argument("--data_path", type=str, default="/home/ts-cjh/Data/MRAD/data/spot-diff/data", help="train dataset path")
     parser.add_argument("--save_path", type=str, default='./checkpoints/released', help='path to save results')
     parser.add_argument("--cache_dir", type=str, default='./cache', help='directory for cache files')
     parser.add_argument("--dataset", type=str, default='visa', help="train dataset name")
@@ -269,13 +269,13 @@ if __name__ == '__main__':
                         help='Model type to train: mrad-ft or mrad-clip')
     parser.add_argument("--ft_epochs", type=int, default=1, help="epochs for FT stage (patch_proj training)")
     parser.add_argument("--clip_epochs", type=int, default=5, help="epochs for CLIP stage (prompt_learner + prompt_proj training)")
-    parser.add_argument("--learning_rate", type=float, default=0.0004, help="learning rate")
+    parser.add_argument("--learning_rate", type=float, default=0.0005, help="learning rate")
     parser.add_argument("--batch_size", type=int, default=8, help="batch size")
     parser.add_argument("--image_size", type=int, default=518, help="image size")
     parser.add_argument("--print_freq", type=int, default=1, help="print frequency")
     parser.add_argument("--save_freq", type=int, default=1, help="save frequency")
     parser.add_argument("--seed", type=int, default=111, help="random seed")
-    parser.add_argument("--device", type=str, default='cuda:0')
+    parser.add_argument("--device", type=str, default='cuda:1')
 
     args = parser.parse_args()
     setup_seed(args.seed)
