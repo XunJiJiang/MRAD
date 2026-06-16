@@ -99,9 +99,9 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
                     neg_mask = (mask == 0)
 
                     if pos_mask.sum() > 0:
-                        pos_feats_all.append(patch[pos_mask])   # (*, 768)
+                        pos_feats_all.append(patch[pos_mask].cpu())   # (*, 768) on CPU
                     if neg_mask.sum() > 0:
-                        neg_feats_all.append(patch[neg_mask])   # (*, 768)
+                        neg_feats_all.append(patch[neg_mask].cpu())   # (*, 768) on CPU
 
             # ----------------------------------------------------------------
             # Pass 2: KMeans clustering per class → cluster centers as prototypes
