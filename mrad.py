@@ -76,7 +76,9 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
 
             for items in tqdm(train_loader_cache, desc="Collecting patches"):
                 images = items['img'].to(device)
-                gt = items['img_mask'].squeeze().to(device)  # B 518 518
+                gt = items['img_mask'].to(device)
+                if gt.dim() == 4:
+                    gt = gt.squeeze(1)  # remove channel dim: (B, 1, H, W) -> (B, H, W)
                 gt[gt > 0.5] = 1
                 gt[gt <= 0.5] = 0
                 _, patch_features, _, _ = clip_model.encode_image(
