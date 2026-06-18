@@ -213,3 +213,5 @@ checkpoint copy/
 checkpoints/
 checkpoints copy/
 results/
+
+.backup_*/
