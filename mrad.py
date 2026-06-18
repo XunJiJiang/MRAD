@@ -177,16 +177,16 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
                         pos_mask = (mask == 1)                # abnormal
                         neg_mask = (mask == 0)                # normal
 
-                        # 收集异常类 patch
+                        # 收集异常类 patch（立即转 CPU numpy，避免 GPU 上 torch.cat 拼接时 OOM）
                         if pos_mask.sum() > 0:
-                            pos_patches_all.append(patch[pos_mask])  # (n_pos, D)
-                        # 收集正常类 patch
+                            pos_patches_all.append(patch[pos_mask].cpu().numpy().astype('float32'))  # (n_pos, D)
+                        # 收集正常类 patch（立即转 CPU numpy，避免 GPU 上 torch.cat 拼接时 OOM）
                         if neg_mask.sum() > 0:
-                            neg_patches_all.append(patch[neg_mask])  # (n_neg, D)
+                            neg_patches_all.append(patch[neg_mask].cpu().numpy().astype('float32'))  # (n_neg, D)
 
                 # 阶段二：对异常类 patch 执行 KMeans 聚类生成 k 个原型
                 if len(pos_patches_all) > 0:
-                    pos_features = torch.cat(pos_patches_all, dim=0).cpu().numpy().astype('float32')
+                    pos_features = np.concatenate(pos_patches_all, axis=0)
                     # 如果 patch 数量过多，随机采样以控制 KMeans 计算量
                     if pos_features.shape[0] > max_kmeans_samples:
                         idx = np.random.choice(pos_features.shape[0], max_kmeans_samples, replace=False)
@@ -208,7 +208,7 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
 
                 # 对正常类 patch 执行 KMeans 聚类生成 k 个原型
                 if len(neg_patches_all) > 0:
-                    neg_features = torch.cat(neg_patches_all, dim=0).cpu().numpy().astype('float32')
+                    neg_features = np.concatenate(neg_patches_all, axis=0)
                     # 如果 patch 数量过多，随机采样
                     if neg_features.shape[0] > max_kmeans_samples:
                         idx = np.random.choice(neg_features.shape[0], max_kmeans_samples, replace=False)
