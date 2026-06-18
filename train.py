@@ -248,6 +248,20 @@ def train(args):
         }, final_path)
         logger.info(f'MRAD-CLIP model saved to {final_path}')
 
+    # 保存参数
+    params_path = os.path.join(args.save_path, 'training_params.txt')
+    with open(params_path, 'w') as f:
+        f.write(f"Model Type: {model_type}\n")
+        f.write(f"FT Epochs: {args.ft_epochs}\n")
+        f.write(f"CLIP Epochs: {args.clip_epochs}\n")
+        f.write(f"Learning Rate: {args.learning_rate}\n")
+        f.write(f"Batch Size: {args.batch_size}\n")
+        f.write(f"Image Size: {args.image_size}\n")
+        f.write(f"Feature Map Layers: {args.feature_map_layer}\n")
+        f.write(f"Features List: {args.features_list}\n")
+        f.write(f"Seed: {args.seed}\n")
+    logger.info(f'Training parameters saved to {params_path}')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("MRAD Training", add_help=True)

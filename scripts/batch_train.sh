@@ -40,10 +40,28 @@ last_checkpoint_idx=$latest_number
 
 echo "Last checkpoint index: $last_checkpoint_idx"
 
+# 尝试的学习率 0.0004-0.0001 , 0.0005-0.0009
+# 先使用 0.0004-0.0001 共训练 4 次, 然后使用 0.0005-0.0009 共训练 5 次, 最后使用 0.0001-0.0009 共训练 9 次
+# 这里限制训练 9 次
+# BATCH_SIZE=9
+
 # 循环执行训练脚本
 for i in $(seq 1 $BATCH_SIZE); do
   echo "Starting training iteration $i..."
   new_idx=$(($i + $last_checkpoint_idx))
+
+  # 前4次使用 0.0004-0.0001 共训练 4 次, 然后使用 0.0005-0.0009 共训练 5 次
+  # 判断是否在前4次
+  # if [ $i -le 4 ]; then
+  #   # 0.0004-0.0001 共训练 4 次
+  #   lr=$(awk -v min=0.0001 -v max=0.0004 'BEGIN{srand(); print min+rand()*(max-min)}')
+  # elif [ $i -le 9 ]; then
+  #   # 0.0005-0.0009 共训练 5 次
+  #   lr=$(awk -v min=0.0005 -v max=0.0009 'BEGIN{srand(); print min+rand()*(max-min)}')
+  # else
+  #   # 0.0001-0.0009 共训练 9 次
+  #   lr=$(awk -v min=0.0001 -v max=0.0009 'BEGIN{srand(); print min+rand()*(max-min)}')
+  # fi
 
   python $TRAIN_SCRIPT \
     --model_type "$MODEL_TYPE" \
@@ -52,6 +70,7 @@ for i in $(seq 1 $BATCH_SIZE); do
     --save_path "$CHECKPOINT_DIR" \
     --cache_dir "$CACHE_DIR" \
     --device "$TRAIN_GPU"
+    # --learning_rate "$lr"
 
   if [ "$new_idx" != -1 ]; then
     mkdir -p "${CHECKPOINT_DIR}_$new_idx"
