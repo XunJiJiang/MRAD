@@ -9,14 +9,10 @@ while [[ $# -gt 0 ]]; do
       BATCH_SIZE="$2"
       shift 2
       ;;
+    # 是否使用多张卡同时进行两个训练任务
     -g|--gpus)
       TRAIN_GPU="$2"
       shift 2
-      ;;
-    # 是否使用多张卡同时进行两个训练任务
-    -m|--multi-gpu)
-      TRAIN_GPU="cuda:0,cuda:1"
-      shift
       ;;
     *)
       echo "Usage: $0 [-b|--batch <batch_size>] [-g|--gpus <cuda:0,cuda:1,...>]"
@@ -87,7 +83,7 @@ run_job() {
 
   echo "Starting training iteration ${iteration} on ${current_gpu}..."
 
-  nohup python $TRAIN_SCRIPT \
+  python "$TRAIN_SCRIPT" \
     --model_type "$MODEL_TYPE" \
     --dataset "$TRAIN_DATASET" \
     --data_path "$TRAIN_DATA_PATH" \
@@ -96,12 +92,9 @@ run_job() {
     --device "$current_gpu" \
     > "$train_log_file" 2>&1 &
 
-  local train_pid=$!
-  echo "Training PID (${iteration}): $train_pid"
-  wait "$train_pid"
   echo "[Stage 1] Training ${iteration} completed. Log: $train_log_file"
 
-  nohup python $TEST_SCRIPT \
+  python "$TEST_SCRIPT" \
     --model_type "mrad-clip" \
     --dataset "$TEST_DATASET" \
     --data_path "$TEST_DATA_PATH" \
@@ -112,21 +105,28 @@ run_job() {
     --device "$current_gpu" \
     > "$test_log_file" 2>&1 &
 
-  local test_pid=$!
-  echo "Testing PID (${iteration}): $test_pid"
-  wait "$test_pid"
   echo "Testing ${iteration} completed. Log: $test_log_file"
 }
 
-# 循环执行训练脚本
+# 每张 GPU 启动一个 worker，同一张卡上的任务会顺序执行，避免并发抢占
+run_gpu_worker() {
+  local gpu_index="$1"
+  local current_gpu="$2"
+  local gpu_count="$3"
+  local iteration
+  local new_idx
+
+  for ((iteration = gpu_index + 1; iteration <= BATCH_SIZE; iteration += gpu_count)); do
+    new_idx=$((iteration + last_checkpoint_idx))
+    run_job "$iteration" "$new_idx" "$current_gpu"
+  done
+}
+
+gpu_count=${#GPU_ARRAY[@]}
 job_pids=()
-for i in $(seq 1 $BATCH_SIZE); do
-  new_idx=$(($i + $last_checkpoint_idx))
-
-  # 计算当前训练使用的GPU
-  current_gpu="${GPU_ARRAY[$(( (i - 1) % ${#GPU_ARRAY[@]} ))]}"
-
-  run_job "$i" "$new_idx" "$current_gpu" &
+for gpu_index in "${!GPU_ARRAY[@]}"; do
+  current_gpu="${GPU_ARRAY[$gpu_index]}"
+  run_gpu_worker "$gpu_index" "$current_gpu" "$gpu_count" &
   job_pids+=("$!")
 done
 
