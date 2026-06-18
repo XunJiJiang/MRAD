@@ -26,6 +26,10 @@ if [ -z "$BATCH_SIZE" ]; then
   BATCH_SIZE=1
 fi
 
+if [ -z "$TRAIN_GPU" ]; then
+  TRAIN_GPU="$_TRAIN_GPU"
+fi
+
 parse_gpu_list() {
   local raw_gpu_list="$1"
   local -n output_array="$2"
@@ -81,7 +85,8 @@ run_job() {
 
   mkdir -p "$job_checkpoint_dir" "$LOG_DIR" "$result_dir"
 
-  echo "Starting training iteration ${iteration} on ${current_gpu}..."
+  echo "[Task ${iteration}] Starting training on ${current_gpu}"
+  echo "[Task ${iteration}] Training log: $train_log_file"
 
   python "$TRAIN_SCRIPT" \
     --model_type "$MODEL_TYPE" \
@@ -90,9 +95,11 @@ run_job() {
     --save_path "$job_checkpoint_dir" \
     --cache_dir "$CACHE_DIR" \
     --device "$current_gpu" \
-    > "$train_log_file" 2>&1 &
+    > "$train_log_file" 2>&1
 
-  echo "[Stage 1] Training ${iteration} completed. Log: $train_log_file"
+  echo "[Task ${iteration}] Training completed"
+  echo "[Task ${iteration}] Starting testing on ${current_gpu}"
+  echo "[Task ${iteration}] Testing log: $test_log_file"
 
   python "$TEST_SCRIPT" \
     --model_type "mrad-clip" \
@@ -103,9 +110,9 @@ run_job() {
     --checkpoint_path "$job_checkpoint_dir/mrad_clip_final.pth" \
     --model_index "$new_idx" \
     --device "$current_gpu" \
-    > "$test_log_file" 2>&1 &
+    > "$test_log_file" 2>&1
 
-  echo "Testing ${iteration} completed. Log: $test_log_file"
+  echo "[Task ${iteration}] Testing completed"
 }
 
 # 每张 GPU 启动一个 worker，同一张卡上的任务会顺序执行，避免并发抢占
@@ -134,4 +141,4 @@ for job_pid in "${job_pids[@]}"; do
   wait "$job_pid"
 done
 
-echo "Batch training completed."
+echo "All training and testing tasks are completed."
