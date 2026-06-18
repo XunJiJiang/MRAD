@@ -9,7 +9,7 @@ MODEL_TYPE="mrad-clip"
 # Path configuration
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}"
 LOG_DIR="${PROJECT_DIR}/logs/released_${MODEL_TYPE}"
-CACHE_DIR="${PROJECT_DIR}/cache copy"
+CACHE_DIR="${PROJECT_DIR}/cache"
 TRAIN_SCRIPT="${PROJECT_DIR}/train.py"
 TEST_SCRIPT="${PROJECT_DIR}/test.py"
 
