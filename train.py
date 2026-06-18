@@ -80,12 +80,12 @@ def train(args):
     # Load memory bank
     # 构建图像级记忆库（用于异常分类）
     cache_keys, cache_values = build_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
+        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
         device=device, dir=os.path.join(args.cache_dir, f'cache_model_{dataset_name}.pt')
     )
     # 构建 patch 级记忆库（用于异常分割）
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
+        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
         device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
     )
     # 打印记忆库维度信息
