@@ -26,6 +26,10 @@ if [ -z "$BATCH_SIZE" ]; then
   BATCH_SIZE=1
 fi
 
+if [ -z "$TRAIN_GPU" ]; then
+  TRAIN_GPU="$_TRAIN_GPU"
+fi
+
 parse_gpu_list() {
   local raw_gpu_list="$1"
   local -n output_array="$2"
@@ -134,4 +138,4 @@ for job_pid in "${job_pids[@]}"; do
   wait "$job_pid"
 done
 
-echo "Batch training completed."
+echo "Batch training and testing jobs have been dispatched. They will run in the background."

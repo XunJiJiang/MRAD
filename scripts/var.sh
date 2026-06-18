@@ -20,4 +20,4 @@ TEST_DATASET="mvtec"
 TEST_DATA_PATH="/home/ts-cjh/Data/MRAD/data/mvtec_anomaly_detection"
 
 # Training GPU
-TRAIN_GPU="cuda:1"
+_TRAIN_GPU="cuda:0,cuda:1"
