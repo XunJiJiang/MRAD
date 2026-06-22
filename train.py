@@ -85,7 +85,7 @@ def train(args):
     )
     # 构建 patch 级记忆库（用于异常分割）
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
+        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
         device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
         multi_scale=args.multi_scale
     )
@@ -405,7 +405,7 @@ if __name__ == '__main__':
     parser.add_argument("--t_n_ctx", type=int, default=4, help="learnable_text_embedding_length")
     parser.add_argument("--feature_map_layer", type=int, nargs="+", default=[0, 1, 2, 3], help="feature map layers")
     parser.add_argument("--features_list", type=int, nargs="+", default=[6, 12, 18, 24], help="features used")
-    parser.add_argument("--multi_scale", type=bool, default=False, help="enable multi-scale memory retrieval (layers 6,12,18,24)")
+    parser.add_argument("--multi_scale", type=bool, default=True, help="enable multi-scale memory retrieval (layers 6,12,18,24)")
 
     # Training parameters
     # 训练超参数
