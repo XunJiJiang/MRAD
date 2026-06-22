@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from tqdm import tqdm
 # 导入 KMeans 聚类算法（用于记忆库构建中的聚类操作）
 from sklearn.cluster import KMeans
+# 导入 os 模块，用于多尺度 memory bank 文件路径拼接
+import os
 
 
 # ============================================================
@@ -63,10 +65,87 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
 # ============================================================
 # build_patch_cache_model: 构建 patch 级记忆库（逐样本收集正常/异常 patch 的均值特征）
 # ============================================================
-def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None):
+def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None, multi_scale=False):
     cache_dir = dir
     # --- 分支1: 从头构建 patch 级记忆库 ---
-    if load_cache == False:    
+    if load_cache == False:
+        # ============================================================
+        # 多尺度模式：为 layers 6, 12, 18, 24 分别构建独立 memory bank
+        # ============================================================
+        if multi_scale:
+            num_layers = 4
+            # 为每层独立维护特征和标签列表
+            all_train_features = [[] for _ in range(num_layers)]
+            all_train_labels = [[] for _ in range(num_layers)]
+
+            # 禁用梯度计算
+            with torch.no_grad():
+                # 遍历训练数据，逐样本提取各层 patch 特征
+                for items in tqdm(train_loader_cache):
+                    images = items['img'].to(device)
+                    labels = items['anomaly'].to(device)
+                    gt = items['img_mask'].squeeze().to(device)
+                    # 将 ground truth mask 二值化
+                    gt[gt > 0.5] = 1
+                    gt[gt <= 0.5] = 0
+                    # 使用 CLIP 模型编码图像，一次性获取所有层的 patch 特征
+                    image_fe, patch_features, _, patch_projections = clip_model.encode_image(
+                        images, [6, 12, 18, 24], DPAM_layer=24
+                    )
+                    # 将 ground truth mask 下采样到 patch 特征图尺寸 (37x37)
+                    gt_resized = F.interpolate(gt.unsqueeze(1), size=(37, 37), mode='bilinear', align_corners=False)
+                    gt_resized = gt_resized.squeeze(1)
+
+                    # 逐层处理 patch 特征，每层独立收集正常/异常原型
+                    for layer_idx in range(num_layers):
+                        patch_feature = patch_features[layer_idx]
+                        # 对 patch 特征进行邻域平均
+                        patch_feature = average_neighbor(patch_feature)
+
+                        # 逐样本按 mask 分类 patch 为异常和正常
+                        for i in range(images.size(0)):
+                            patch = patch_feature[i]              # (1369, 768)
+                            patch = patch.view(37, 37, -1)        # (37, 37, 768)
+                            mask = gt_resized[i]                  # (37, 37)
+
+                            pos_mask = (mask == 1)                # 异常区域
+                            neg_mask = (mask == 0)                # 正常区域
+
+                            # 异常 patch 均值特征加入记忆库（标签=1）
+                            if pos_mask.sum() > 0:
+                                pos_feat = patch[pos_mask]
+                                pos_feat = pos_feat.mean(dim=0, keepdim=True)
+                                pos_feat = pos_feat / pos_feat.norm(dim=-1, keepdim=True)
+                                all_train_features[layer_idx].append(pos_feat)
+                                all_train_labels[layer_idx].append(torch.tensor([1], device=device))
+
+                            # 正常 patch 均值特征加入记忆库（标签=0）
+                            if neg_mask.sum() > 0:
+                                neg_feat = patch[neg_mask]
+                                neg_feat = neg_feat.mean(dim=0, keepdim=True)
+                                neg_feat = neg_feat / neg_feat.norm(dim=-1, keepdim=True)
+                                all_train_features[layer_idx].append(neg_feat)
+                                all_train_labels[layer_idx].append(torch.tensor([0], device=device))
+
+            # 逐层拼接特征、生成 one-hot 标签并保存到独立文件
+            cache_keys_list = []
+            cache_values_list = []
+            for layer_idx in range(num_layers):
+                ck = torch.cat(all_train_features[layer_idx], dim=0)
+                rl = torch.cat(all_train_labels[layer_idx], dim=0).to(torch.int64)
+                cv = F.one_hot(rl, num_classes=2).float().to(device)
+                cache_keys_list.append(ck)
+                cache_values_list.append(cv)
+                # 在文件名中插入层索引后缀（如 cache_patch_model_visa_l0.pt）
+                base, ext = os.path.splitext(cache_dir)
+                layer_dir = f"{base}_l{layer_idx}{ext}"
+                torch.save({"keys": ck.cpu(), "values": cv.cpu()}, layer_dir)
+
+            return cache_keys_list, cache_values_list
+
+        # ============================================================
+        # 原始单层模式（multi_scale=False，保持向后兼容）
+        # ============================================================
         cache_keys = []
         cache_values = []
 
@@ -134,6 +213,21 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
 
     # --- 分支2: 从磁盘加载已有 patch 级记忆库 ---
     else:
+        # ============================================================
+        # 多尺度模式：按层索引分别加载 4 个 memory bank 文件
+        # ============================================================
+        if multi_scale:
+            cache_keys_list = []
+            cache_values_list = []
+            for layer_idx in range(4):
+                base, ext = os.path.splitext(cache_dir)
+                layer_dir = f"{base}_l{layer_idx}{ext}"
+                cache_dict = torch.load(layer_dir, map_location="cpu")
+                cache_keys_list.append(cache_dict["keys"].to(device))
+                cache_values_list.append(cache_dict["values"].to(device))
+            return cache_keys_list, cache_values_list
+
+        # 原始单层模式：加载单个文件
         cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
@@ -177,8 +271,92 @@ def compute_socre(image_features, cache_keys, cache_values, device, proj=None, n
 # ============================================================
 def compute_patch_socre(patch_features, cache_keys, cache_values, ori_sim_weights=None,
         device=None, proj=None, need_mask=False, patch_projection=False, gt_mask=None,
-        anomaly_threshold=0.5, is_mradft=False, use_proj=True):
+        anomaly_threshold=0.5, is_mradft=False, use_proj=True,
+        multi_scale=False, scale_weights=None):
 
+    # ============================================================
+    # 多尺度模式：逐层检索（layers 6/12/18/24）后加权融合 logits
+    # ============================================================
+    if multi_scale:
+        # 对可学习融合权重做 softmax 归一化，确保权重和为 1
+        normalized_weights = F.softmax(scale_weights, dim=0)  # [4]
+        num_layers = len(patch_features)  # 4
+
+        logits_list = []
+        last_ori_sim = None
+        last_ft_sim = None
+
+        # 逐层计算相似度检索和 logits
+        for layer_idx in range(num_layers):
+            pf = patch_features[layer_idx]  # (B, 1369, 768)
+            ck = cache_keys[layer_idx]      # (N_l, 768)
+            cv = cache_values[layer_idx]    # (N_l, 2)
+
+            # 计算当前层 patch 特征与记忆库 keys 的原始相似度
+            ori_sim = torch.matmul(pf, ck.to(device).t())  # (B, 1369, N_l)
+
+            # 如果启用投影适配器，分别投影 patch 特征和 memory keys
+            if use_proj and proj is not None:
+                pf_proj = proj(pf, 0)
+                ck_proj = proj(ck, 1)
+                sim = torch.matmul(pf_proj, ck_proj.T.to(device))
+            else:
+                sim = ori_sim
+
+            # 保存微调阶段的相似度副本
+            ft_sim = sim.clone()
+
+            # mask 机制：过滤相似度过高的 patch（防过拟合）
+            if need_mask:
+                th = torch.quantile(ori_sim, 0.8, dim=-1, keepdim=True)
+                mask = ori_sim > th
+                sim = sim.masked_fill(mask, float('-inf'))
+
+            # softmax 归一化并加权求和得到当前层 logits
+            sim = F.softmax(sim, dim=-1)
+            logits = torch.matmul(sim, cv.to(device).float())  # (B, 1369, 2)
+            logits_list.append(logits)
+
+            # 保留最后一层的原始相似度和微调相似度用于返回
+            if layer_idx == num_layers - 1:
+                last_ori_sim = ori_sim
+                last_ft_sim = ft_sim
+
+        # 多尺度加权融合：fused_logits = Σ(w_i * logits_i)
+        fused_logits = sum(normalized_weights[i] * logits_list[i] for i in range(num_layers))
+
+        # 使用融合后的 logits 计算 new_patch_features（非 mradft 模式）
+        if not is_mradft:
+            anomaly_probs = fused_logits[:, :, 1]
+            anomaly_threshold_t = torch.tensor(anomaly_threshold, device=anomaly_probs.device, dtype=anomaly_probs.dtype)
+            anomaly_area = (anomaly_probs > anomaly_threshold_t).float()  # (B, 1369)
+            normal_area = 1.0 - anomaly_area
+
+            anomaly_mask = anomaly_area.unsqueeze(-1)  # (B, 1369, 1)
+            normal_mask = normal_area.unsqueeze(-1)
+
+            # patch_projection 为最后一层的投影特征，用于计算 token 特征
+            anomaly_feat_sum = (patch_projection * anomaly_mask).sum(dim=1)  # (B, 768)
+            normal_feat_sum = (patch_projection * normal_mask).sum(dim=1)
+
+            anomaly_count = anomaly_mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
+            normal_count = normal_mask.sum(dim=1).clamp(min=1.0)
+
+            anomaly_token = anomaly_feat_sum / anomaly_count  # (B, 768)
+            normal_token = normal_feat_sum / normal_count
+
+            anomaly_token[anomaly_mask.sum(dim=1).squeeze(-1) == 0] = 0.0
+            normal_token[normal_mask.sum(dim=1).squeeze(-1) == 0] = 0.0
+
+            new_patch_features = torch.stack([normal_token, anomaly_token], dim=1)  # (B, 2, 768)
+        else:
+            new_patch_features = 0
+
+        return fused_logits, new_patch_features, last_ori_sim, last_ft_sim
+
+    # ============================================================
+    # 原始单层模式（multi_scale=False，保持向后兼容）
+    # ============================================================
     # 计算每个 patch 特征与记忆库 keys 的原始相似度
     ori_sim_weights = torch.matmul(patch_features, cache_keys.to(device).t())#b 1369 n
 

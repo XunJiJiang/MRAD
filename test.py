@@ -88,6 +88,8 @@ def test(args):
     normal_atten = CrossAttentionPooling()
 
     model_type = args.model_type
+    # 初始化检查点为 None（mrad-tf 模式不需要加载检查点）
+    checkpoint = None
 
     # Only mrad-clip and mrad-ft need to load weights
     if model_type in ['mrad-clip', 'mrad-ft']:
@@ -107,10 +109,26 @@ def test(args):
     model.to(device)
     model.visual.DAPM_replace(DPAM_layer = 24)
 
+    # 多尺度模式：初始化融合权重
+    if args.multi_scale:
+        # 检查检查点中是否包含 scale_weights
+        scale_weights_in_checkpoint = ('scale_weights' in checkpoint) if checkpoint else False
+        if scale_weights_in_checkpoint:
+            # 从检查点加载可学习融合权重
+            scale_weights = checkpoint["scale_weights"].to(device)
+        else:
+            # mrad-tf 或无 scale_weights 的旧检查点：使用等权重
+            scale_weights = torch.ones(4, device=device) / 4
+    else:
+        scale_weights = None
+
     cache_key, cache_value = build_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'))
-    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'))
+    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'), multi_scale=args.multi_scale)
     print(f"cache_key:{cache_key.shape}")
-    print(f"cache_keys_patch:{cache_keys_patch.shape}")
+    if args.multi_scale:
+        print(f"cache_keys_patch:{[ck.shape for ck in cache_keys_patch]}")
+    else:
+        print(f"cache_keys_patch:{cache_keys_patch.shape}")
 
 
     start = time.time()
@@ -132,26 +150,58 @@ def test(args):
         with torch.no_grad():
             image_features, patch_features,all_cls_tokens,patch_projections = model.encode_image(image, features_list,DPAM_layer=24)
 
-            patch_pojection = patch_projections[3]
-            patch_pojection = average_neighbor(patch_pojection)
-            patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
-            patch_f_bia = patch_features[3]
-            patch_f_bia = average_neighbor(patch_f_bia)
-            patch_f_bia = patch_f_bia / patch_f_bia.norm(dim=-1, keepdim=True)
-
             # Decide whether to use projection
             use_proj = (model_type != 'mrad-tf')
 
-            seg_logit, patch_f_bia, ori_weight, ft_weight = compute_patch_socre(
-                patch_f_bia, cache_keys_patch, cache_values_patch,
-                device=device,
-                proj=patch_proj if use_proj else None,
-                need_mask=False,
-                patch_projection=patch_pojection,
-                gt_mask=items['img_mask'],
-                is_mradft=(model_type != 'mrad-clip'),
-                use_proj=use_proj
-            )
+            # ============================================================
+            # 多尺度模式：处理 layers 6, 12, 18, 24 所有层特征
+            # ============================================================
+            if args.multi_scale:
+                # 逐层处理 patch 特征：近邻平均 + L2 归一化
+                patch_f_bia_list = []
+                for layer_idx in range(len(patch_features)):
+                    pf = patch_features[layer_idx]
+                    pf = average_neighbor(pf)
+                    pf = pf / pf.norm(dim=-1, keepdim=True)
+                    patch_f_bia_list.append(pf)
+                # patch_projection 使用最后一层投影特征（用于 new_patch_features 计算）
+                patch_pojection = patch_projections[3]
+                patch_pojection = average_neighbor(patch_pojection)
+                patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
+
+                # 多尺度检索：逐层检索后加权融合 logits
+                seg_logit, patch_f_bia, ori_weight, ft_weight = compute_patch_socre(
+                    patch_f_bia_list, cache_keys_patch, cache_values_patch,
+                    device=device,
+                    proj=patch_proj if use_proj else None,
+                    need_mask=False,
+                    patch_projection=patch_pojection,
+                    gt_mask=items['img_mask'],
+                    is_mradft=(model_type != 'mrad-clip'),
+                    use_proj=use_proj,
+                    multi_scale=True, scale_weights=scale_weights
+                )
+            # ============================================================
+            # 原始单层模式（multi_scale=False，保持向后兼容）
+            # ============================================================
+            else:
+                patch_pojection = patch_projections[3]
+                patch_pojection = average_neighbor(patch_pojection)
+                patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
+                patch_f_bia = patch_features[3]
+                patch_f_bia = average_neighbor(patch_f_bia)
+                patch_f_bia = patch_f_bia / patch_f_bia.norm(dim=-1, keepdim=True)
+
+                seg_logit, patch_f_bia, ori_weight, ft_weight = compute_patch_socre(
+                    patch_f_bia, cache_keys_patch, cache_values_patch,
+                    device=device,
+                    proj=patch_proj if use_proj else None,
+                    need_mask=False,
+                    patch_projection=patch_pojection,
+                    gt_mask=items['img_mask'],
+                    is_mradft=(model_type != 'mrad-clip'),
+                    use_proj=use_proj
+                )
             seg_similarity_map = AnomalyCLIP_lib.get_similarity_map(seg_logit, args.image_size)
 
             # CLIP image-text alignment (only needed for mrad-clip)
@@ -331,6 +381,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default='mrad-clip',
         choices=['mrad-clip', 'mrad-ft', 'mrad-tf'],
         help='Model type: mrad-clip (full), mrad-ft (fine-tuned), mrad-tf (train-free)')
+    parser.add_argument("--multi_scale", type=bool, default=False, help="enable multi-scale memory retrieval (layers 6,12,18,24)")
 
     # 模型索引
     parser.add_argument("--model_index", type=int, default=0, help="model index for logging")

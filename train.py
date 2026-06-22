@@ -86,11 +86,21 @@ def train(args):
     # 构建 patch 级记忆库（用于异常分割）
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
         load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
-        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
+        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
+        multi_scale=args.multi_scale
     )
     # 打印记忆库维度信息
     print(f"cache_key: {cache_keys.shape}")
-    print(f"cache_keys_patch: {cache_keys_patch.shape}")
+    if args.multi_scale:
+        print(f"cache_keys_patch: {[ck.shape for ck in cache_keys_patch]}")
+    else:
+        print(f"cache_keys_patch: {cache_keys_patch.shape}")
+
+    # 多尺度模式：创建可学习融合权重（layers 6, 12, 18, 24 各层权重，softmax 归一化后加权融合）
+    if args.multi_scale:
+        scale_weights = torch.nn.Parameter(torch.ones(4, device=device) / 4)
+    else:
+        scale_weights = None
 
     # Set total epochs based on model_type
     # 根据模型类型确定总训练轮数
@@ -100,9 +110,13 @@ def train(args):
         total_epochs = args.ft_epochs + args.clip_epochs  # default 1 + 5 = 6
 
     # Stage 1 optimizer: train patch_proj and image_proj (mrad-ft stage)
-    # 第一阶段优化器：训练 patch_proj 和 image_proj
+    # 第一阶段优化器：训练 patch_proj 和 image_proj（以及多尺度融合权重 scale_weights）
+    optimizer_params = list(patch_proj.parameters()) + list(image_proj.parameters())
+    # 多尺度模式：将可学习融合权重加入优化器
+    if args.multi_scale:
+        optimizer_params += [scale_weights]
     optimizer_ft = torch.optim.Adam(
-        list(patch_proj.parameters()) + list(image_proj.parameters()),
+        optimizer_params,
         lr=args.learning_rate, betas=(0.5, 0.999)
     )
     # Cosine learning rate decay only for standalone mrad-ft training
@@ -158,23 +172,50 @@ def train(args):
                     image, args.features_list, DPAM_layer=24
                 )
 
-            # 处理 patch 投影特征：近邻平均 + L2 归一化
-            patch_pojection = patch_projections[3]
-            patch_pojection = average_neighbor(patch_pojection)
-            patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
+            # ============================================================
+            # 多尺度模式：处理 layers 6, 12, 18, 24 所有层特征
+            # ============================================================
+            if args.multi_scale:
+                # 逐层处理 patch 特征：近邻平均 + L2 归一化
+                patch_f_bia_list = []
+                for layer_idx in range(len(patch_features)):
+                    pf = patch_features[layer_idx]
+                    pf = average_neighbor(pf)
+                    pf = pf / pf.norm(dim=-1, keepdim=True)
+                    patch_f_bia_list.append(pf)
+                # patch_projection 使用最后一层投影特征（用于 new_patch_features 计算）
+                patch_pojection = patch_projections[3]
+                patch_pojection = average_neighbor(patch_pojection)
+                patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
 
-            # 处理 patch 特征：近邻平均 + L2 归一化
-            patch_f_bia = patch_features[3]
-            patch_f_bia = average_neighbor(patch_f_bia)
-            patch_f_bia = patch_f_bia / patch_f_bia.norm(dim=-1, keepdim=True)
+                # 多尺度检索：逐层检索后加权融合 logits
+                seg_logit, patch_f_bia, _, _ = compute_patch_socre(
+                    patch_f_bia_list, cache_keys_patch, cache_values_patch,
+                    device=device, proj=patch_proj, need_mask=True,
+                    patch_projection=patch_pojection, use_proj=True,
+                    multi_scale=True, scale_weights=scale_weights
+                )
+            # ============================================================
+            # 原始单层模式（multi_scale=False，保持向后兼容）
+            # ============================================================
+            else:
+                # 处理 patch 投影特征：近邻平均 + L2 归一化
+                patch_pojection = patch_projections[3]
+                patch_pojection = average_neighbor(patch_pojection)
+                patch_pojection = patch_pojection / patch_pojection.norm(dim=-1, keepdim=True)
 
-            # Compute segmentation logits
-            # 计算 patch 级的异常分割 logits
-            seg_logit, patch_f_bia, _, _ = compute_patch_socre(
-                patch_f_bia, cache_keys_patch, cache_values_patch,
-                device=device, proj=patch_proj, need_mask=True,
-                patch_projection=patch_pojection, use_proj=True
-            )
+                # 处理 patch 特征：近邻平均 + L2 归一化
+                patch_f_bia = patch_features[3]
+                patch_f_bia = average_neighbor(patch_f_bia)
+                patch_f_bia = patch_f_bia / patch_f_bia.norm(dim=-1, keepdim=True)
+
+                # Compute segmentation logits
+                # 计算 patch 级的异常分割 logits
+                seg_logit, patch_f_bia, _, _ = compute_patch_socre(
+                    patch_f_bia, cache_keys_patch, cache_values_patch,
+                    device=device, proj=patch_proj, need_mask=True,
+                    patch_projection=patch_pojection, use_proj=True
+                )
             # 将分割 logits 转换为相似度图
             seg_similarity_map = AnomalyCLIP_lib.get_similarity_map(seg_logit, args.image_size).permute(0, 3, 1, 2)
 
@@ -275,39 +316,59 @@ def train(args):
             # mrad-ft 模式：仅保存 patch_proj 和 image_proj
             if model_type == 'mrad-ft':
                 ckp_path = os.path.join(args.save_path, f'mrad_ft_epoch_{epoch + 1}.pth')
-                torch.save({
+                # 构建保存字典
+                save_dict_ft = {
                     "image_proj": image_proj.state_dict(),
                     "patch_proj": patch_proj.state_dict()
-                }, ckp_path)
+                }
+                # 多尺度模式下保存可学习融合权重
+                if args.multi_scale:
+                    save_dict_ft["scale_weights"] = scale_weights.data
+                torch.save(save_dict_ft, ckp_path)
             else:  # mrad-clip
                 # mrad-clip 模式：保存所有可训练模块
                 ckp_path = os.path.join(args.save_path, f'mrad_clip_epoch_{epoch + 1}.pth')
-                torch.save({
+                # 构建保存字典
+                save_dict_clip = {
                     "prompt_learner": prompt_learner.state_dict(),
                     "prompt_proj": prompt_proj.state_dict(),
                     "image_proj": image_proj.state_dict(),
                     "patch_proj": patch_proj.state_dict()
-                }, ckp_path)
+                }
+                # 多尺度模式下保存可学习融合权重
+                if args.multi_scale:
+                    save_dict_clip["scale_weights"] = scale_weights.data
+                torch.save(save_dict_clip, ckp_path)
 
     # Final save
     # 训练结束后保存最终模型
     if model_type == 'mrad-ft':
         # 保存 MRAD-FT 最终模型
         final_path = os.path.join(args.save_path, 'mrad_ft_final.pth')
-        torch.save({
+        # 构建保存字典
+        final_dict_ft = {
             "image_proj": image_proj.state_dict(),
             "patch_proj": patch_proj.state_dict()
-        }, final_path)
+        }
+        # 多尺度模式下保存可学习融合权重
+        if args.multi_scale:
+            final_dict_ft["scale_weights"] = scale_weights.data
+        torch.save(final_dict_ft, final_path)
         logger.info(f'MRAD-FT model saved to {final_path}')
     else:
         # 保存 MRAD-CLIP 最终模型
         final_path = os.path.join(args.save_path, 'mrad_clip_final.pth')
-        torch.save({
+        # 构建保存字典
+        final_dict_clip = {
             "prompt_learner": prompt_learner.state_dict(),
             "prompt_proj": prompt_proj.state_dict(),
             "image_proj": image_proj.state_dict(),
             "patch_proj": patch_proj.state_dict()
-        }, final_path)
+        }
+        # 多尺度模式下保存可学习融合权重
+        if args.multi_scale:
+            final_dict_clip["scale_weights"] = scale_weights.data
+        torch.save(final_dict_clip, final_path)
         logger.info(f'MRAD-CLIP model saved to {final_path}')
 
     # 保存参数
@@ -315,6 +376,7 @@ def train(args):
     params_path = os.path.join(args.save_path, 'training_params.txt')
     with open(params_path, 'w') as f:
         f.write(f"Model Type: {model_type}\n")
+        f.write(f"Multi-Scale: {args.multi_scale}\n")
         f.write(f"FT Epochs: {args.ft_epochs}\n")
         f.write(f"CLIP Epochs: {args.clip_epochs}\n")
         f.write(f"Learning Rate: {args.learning_rate}\n")
@@ -343,6 +405,7 @@ if __name__ == '__main__':
     parser.add_argument("--t_n_ctx", type=int, default=4, help="learnable_text_embedding_length")
     parser.add_argument("--feature_map_layer", type=int, nargs="+", default=[0, 1, 2, 3], help="feature map layers")
     parser.add_argument("--features_list", type=int, nargs="+", default=[6, 12, 18, 24], help="features used")
+    parser.add_argument("--multi_scale", type=bool, default=False, help="enable multi-scale memory retrieval (layers 6,12,18,24)")
 
     # Training parameters
     # 训练超参数

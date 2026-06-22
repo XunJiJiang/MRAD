@@ -163,7 +163,7 @@ Cluster-aware Memory Retrieval
 
 # 方案2：Faiss近邻检索
 
-> 使用 deepseek 尝试修改, 在 Multi-scale-Memory 分支
+> 使用 deepseek 尝试修改, 在 Faiss 分支
 
 MRAD实际上：
 
