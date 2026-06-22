@@ -9,7 +9,7 @@ MODEL_TYPE="mrad-clip"
 # Path configuration
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}-multi-scale-memory"
 LOG_DIR="${PROJECT_DIR}/logs/released_${MODEL_TYPE}-multi-scale-memory"
-CACHE_DIR="${PROJECT_DIR}/cache-multi-scale-memory"
+CACHE_DIR="${PROJECT_DIR}/cache/multi-scale-memory"
 TRAIN_SCRIPT="${PROJECT_DIR}/train.py"
 TEST_SCRIPT="${PROJECT_DIR}/test.py"
 
