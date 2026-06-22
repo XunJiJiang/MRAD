@@ -84,7 +84,7 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
                 for items in tqdm(train_loader_cache):
                     images = items['img'].to(device)
                     labels = items['anomaly'].to(device)
-                    gt = items['img_mask'].squeeze().to(device)
+                    gt = items['img_mask'].squeeze(1).to(device)
                     # 将 ground truth mask 二值化
                     gt[gt > 0.5] = 1
                     gt[gt <= 0.5] = 0
@@ -158,7 +158,7 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             for items in tqdm(train_loader_cache):
                 images = items['img'].to(device)
                 labels =  items['anomaly'].to(device)# b
-                gt = items['img_mask'].squeeze().to(device) # b 518 518
+                gt = items['img_mask'].squeeze(1).to(device) # b 518 518
                 # 将 ground truth mask 二值化：>0.5 视为异常，<=0.5 视为正常
                 gt[gt > 0.5] = 1
                 gt[gt <= 0.5] = 0
