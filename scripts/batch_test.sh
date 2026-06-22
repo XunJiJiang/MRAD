@@ -40,6 +40,10 @@ if [[ -z "$FROM_IDX" || -z "$TO_IDX" ]]; then
   exit 1
 fi
 
+if [[ -z "$TRAIN_GPU" ]]; then
+  TRAIN_GPU="cuda:1"
+fi
+
 # 循环执行测试脚本
 for ((i=FROM_IDX; i<=TO_IDX; i++)); do
   echo "Running test for index: $i"
