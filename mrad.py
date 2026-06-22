@@ -153,7 +153,7 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
 
                 for items in tqdm(train_loader_cache):
                     images = items['img'].to(device)
-                    gt = items['img_mask'].squeeze().to(device)  # b 518 518
+                    gt = items['img_mask'].to(device)           # (B, C, H, W) 或 (B, H, W)
                     # 将 ground truth mask 二值化
                     gt[gt > 0.5] = 1
                     gt[gt <= 0.5] = 0
@@ -165,9 +165,18 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
                     # L2 归一化（为 spherical KMeans 做准备）
                     patch_feature = patch_feature / patch_feature.norm(dim=-1, keepdim=True)
 
-                    # 将 ground truth mask 下采样到 patch 特征图尺寸 (37x37)
-                    gt_resized = F.interpolate(gt.unsqueeze(1), size=(37, 37), mode='bilinear', align_corners=False)
-                    gt_resized = gt_resized.squeeze(1)  # (B, 37, 37)
+                    # 将 ground truth mask 统一为 4D (N, C, H, W) 格式，确保 F.interpolate 正常工作
+                    #  避免 squeeze() 在 batch_size=1 时去除 batch 维导致 3D→1D 空间维度错误
+                    if gt.dim() == 2:
+                        gt_4d = gt.unsqueeze(0).unsqueeze(0)   # (H, W) → (1, 1, H, W)
+                    elif gt.dim() == 3:
+                        gt_4d = gt.unsqueeze(1)                 # (B, H, W) → (B, 1, H, W)
+                    elif gt.dim() == 4:
+                        gt_4d = gt                              # (B, C, H, W) 不变
+                    else:
+                        continue                                # 不支持的维度，跳过
+                    gt_resized = F.interpolate(gt_4d, size=(37, 37), mode='bilinear', align_corners=False)
+                    gt_resized = gt_resized.squeeze(1)          # (B, 37, 37)
 
                     # 逐样本收集正常/异常 patch
                     for i in range(images.size(0)):
@@ -232,15 +241,24 @@ def build_patch_cache_model(load_cache=False, clip_model=None, train_loader_cach
                 for items in tqdm(train_loader_cache):
                     images = items['img'].to(device)
                     labels = items['anomaly'].to(device)
-                    gt = items['img_mask'].squeeze().to(device)
+                    gt = items['img_mask'].to(device)           # (B, C, H, W) 或 (B, H, W)
                     gt[gt > 0.5] = 1
                     gt[gt <= 0.5] = 0
                     image_fe, patch_features, _, patch_projections = clip_model.encode_image(images, [6, 12, 18, 24], DPAM_layer=24)
                     patch_feature = patch_features[3]
                     patch_feature = average_neighbor(patch_feature)
 
-                    gt_resized = F.interpolate(gt.unsqueeze(1), size=(37, 37), mode='bilinear', align_corners=False)
-                    gt_resized = gt_resized.squeeze(1)
+                    # 统一为 4D (N, C, H, W) 格式，避免 batch_size=1 时维度错误
+                    if gt.dim() == 2:
+                        gt_4d = gt.unsqueeze(0).unsqueeze(0)   # (H, W) → (1, 1, H, W)
+                    elif gt.dim() == 3:
+                        gt_4d = gt.unsqueeze(1)                 # (B, H, W) → (B, 1, H, W)
+                    elif gt.dim() == 4:
+                        gt_4d = gt                              # (B, C, H, W) 不变
+                    else:
+                        continue                                # 不支持的维度，跳过
+                    gt_resized = F.interpolate(gt_4d, size=(37, 37), mode='bilinear', align_corners=False)
+                    gt_resized = gt_resized.squeeze(1)          # (B, 37, 37)
 
                     # 逐样本处理：根据 mask 将 patch 分为异常和正常两类
                     for i in range(images.size(0)):
