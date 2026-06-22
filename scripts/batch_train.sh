@@ -79,11 +79,11 @@ run_job() {
   local new_idx="$2"
   local current_gpu="$3"
   local job_checkpoint_dir="${CHECKPOINT_DIR}_${new_idx}"
-  local train_log_file="${CHECKPOINT_DIR}/train_${new_idx}.log"
+  local train_log_file="${job_checkpoint_dir}/train_${new_idx}.log"
   local test_log_file="${LOG_DIR}/test_${new_idx}.log"
   local result_dir="${LOG_DIR}/results_${new_idx}"
 
-  mkdir -p "$job_checkpoint_dir" "$LOG_DIR" "$result_dir"
+  mkdir -p "$job_checkpoint_dir" "$LOG_DIR" "$result_dir" "$CACHE_DIR"
 
   echo "[Task ${iteration}] Starting training on ${current_gpu}"
   echo "[Task ${iteration}] Training log: $train_log_file"
