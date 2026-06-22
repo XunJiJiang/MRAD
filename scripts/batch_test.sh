@@ -40,6 +40,11 @@ if [[ -z "$FROM_IDX" || -z "$TO_IDX" ]]; then
   exit 1
 fi
 
+# 检查 TRAIN_GPU 是否为空，如果是，则使用默认值
+if [ -z "$TRAIN_GPU" ]; then
+  TRAIN_GPU="cuda:1"
+fi
+
 # 循环执行测试脚本
 for ((i=FROM_IDX; i<=TO_IDX; i++)); do
   echo "Running test for index: $i"
