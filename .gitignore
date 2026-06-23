@@ -214,5 +214,6 @@ checkpoints/
 checkpoints copy/
 results/
 results_*/
+data/
 
 .backup_*/
