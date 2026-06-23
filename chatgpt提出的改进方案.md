@@ -163,7 +163,7 @@ Cluster-aware Memory Retrieval
 
 # 方案2：Faiss近邻检索
 
-> 使用 deepseek 尝试修改, 在 Multi-scale-Memory 分支
+> 使用 deepseek 尝试修改, 在 Faiss 分支  分数没有提升, 反而下降了
 
 MRAD实际上：
 
@@ -224,6 +224,8 @@ Memory Retrieval Transformer
 
 # 方案3：多尺度Memory（非常值得做）
 
+> 使用 deepseek 尝试修改, 在 Multi-scale-Memory 分支  分数没有提升, 反而下降了
+>
 MRAD只用：
 
 ```python
@@ -298,6 +300,8 @@ Multi-scale Memory Retrieval
 ---
 
 # 方案4：加入Cross-Attention
+
+> 使用 deepseek 尝试修改, 在 Cross-Attention 分支
 
 MRAD Retrieval：
 
