@@ -8,7 +8,7 @@ from utils.transforms import normalize, get_transform
 from utils.dataset import Dataset
 from utils.logger import get_logger
 from tqdm import tqdm
-from models.mlp import AnomalyMLP,MLP,Projector,average_neighbor
+from models.mlp import AnomalyMLP,MLP,Projector,average_neighbor,CrossAttentionRetrieval
 from models.attention import NormalFeatureAttention,CrossAttentionPooling
 import os
 import time
@@ -86,6 +86,9 @@ def test(args):
     patch_proj = Projector(1024,768,length=2)
     prompt_proj = AnomalyMLP()
     normal_atten = CrossAttentionPooling()
+    # 初始化交叉注意力检索模块
+    patch_cross_attn = CrossAttentionRetrieval(embed_dim=768, num_heads=8)
+    image_cross_attn = CrossAttentionRetrieval(embed_dim=768, num_heads=8)
 
     model_type = args.model_type
 
@@ -96,6 +99,16 @@ def test(args):
         image_proj.to(device)
         patch_proj.load_state_dict(checkpoint["patch_proj"])
         patch_proj.to(device)
+        # 加载交叉注意力模块权重（旧检查点无此键时跳过，保持向后兼容）
+        if "image_cross_attn" in checkpoint:
+            image_cross_attn.load_state_dict(checkpoint["image_cross_attn"])
+        if "patch_cross_attn" in checkpoint:
+            patch_cross_attn.load_state_dict(checkpoint["patch_cross_attn"])
+    patch_cross_attn.to(device)
+    image_cross_attn.to(device)
+    # 交叉注意力模块设为评估模式
+    patch_cross_attn.eval()
+    image_cross_attn.eval()
 
     # Only mrad-clip needs prompt_learner and prompt_proj
     if model_type == 'mrad-clip':
@@ -150,7 +163,8 @@ def test(args):
                 patch_projection=patch_pojection,
                 gt_mask=items['img_mask'],
                 is_mradft=(model_type != 'mrad-clip'),
-                use_proj=use_proj
+                use_proj=use_proj,
+                cross_attn=patch_cross_attn if use_proj else None
             )
             seg_similarity_map = AnomalyCLIP_lib.get_similarity_map(seg_logit, args.image_size)
 
@@ -165,7 +179,8 @@ def test(args):
             cache_logits, _ = compute_socre(
                 image_features, cache_key, cache_value, device,
                 proj=image_proj if use_proj else None,
-                use_proj=use_proj
+                use_proj=use_proj,
+                cross_attn=image_cross_attn if use_proj else None
             )
 
             text_probs = cache_logits

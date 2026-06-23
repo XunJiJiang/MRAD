@@ -132,6 +132,49 @@ def weights_init(m):
         m.weight.data.normal_(0.0, 0.02)
         m.bias.data.fill_(0)
 
+# ============================================================
+# CrossAttentionRetrieval: 交叉注意力检索模块
+# 用 nn.MultiheadAttention 替代原始 softmax(QK^T)@V 检索
+# query 通过多头交叉注意力与 memory bank 交互，再由线性分类头映射到类别 logits
+# ============================================================
+class CrossAttentionRetrieval(nn.Module):
+    def __init__(self, embed_dim=768, num_heads=8, num_classes=2, dropout=0.1):
+        super().__init__()
+        # 多头交叉注意力：query 对 memory 做 cross-attention
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        # 分类头：将交叉注意力输出映射为正常/异常 logits
+        self.cls_head = nn.Linear(embed_dim, num_classes)
+
+    # 前向传播：query 与 memory bank 交互后分类
+    def forward(self, query, memory):
+        """
+        Args:
+            query:  (B, N_query, D) — 图像特征 (N_query=1) 或 patch 特征 (N_query=1369)
+            memory: (N_mem, D)      — 记忆库 keys
+        Returns:
+            logits: (B, N_query, num_classes)
+        """
+        B = query.size(0)
+        # 将记忆库扩展为 batch 维度，供 MHA 使用
+        memory_batched = memory.unsqueeze(0).expand(B, -1, -1)  # (N_mem, D) → (B, N_mem, D)
+
+        # 交叉注意力：query attends to memory bank
+        attn_out, _ = self.cross_attn(
+            query=query,
+            key=memory_batched,
+            value=memory_batched,
+            need_weights=False
+        )  # → (B, N_query, D)
+
+        # 将注意力输出映射为异常/正常 logits
+        logits = self.cls_head(attn_out)  # → (B, N_query, 2)
+        return logits
+
 # avg_pool2d_reflect: 镜像填充平均池化，保持与输入相同的空间分辨率
 # 注意：此函数被定义了两次（重复），第二次定义会覆盖第一次
 def avg_pool2d_reflect(x, k):

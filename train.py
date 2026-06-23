@@ -12,7 +12,7 @@ from tqdm import tqdm
 import numpy as np
 import os
 import random
-from models.mlp import AnomalyMLP, MLP, Projector, average_neighbor
+from models.mlp import AnomalyMLP, MLP, Projector, average_neighbor, CrossAttentionRetrieval
 from mrad import build_cache_model, compute_socre, compute_patch_socre, build_patch_cache_model
 
 # 固定随机种子，确保实验可复现
@@ -59,6 +59,12 @@ def train(args):
     patch_proj.to(device)
     image_proj.to(device)
 
+    # 初始化交叉注意力检索模块（替代 softmax(QK^T)@V）
+    patch_cross_attn = CrossAttentionRetrieval(embed_dim=768, num_heads=8)
+    image_cross_attn = CrossAttentionRetrieval(embed_dim=768, num_heads=8)
+    patch_cross_attn.to(device)
+    image_cross_attn.to(device)
+
     # mrad-clip requires additional components
     # mrad-clip 模式下需要额外的 prompt 相关组件
     if model_type == 'mrad-clip':
@@ -102,7 +108,8 @@ def train(args):
     # Stage 1 optimizer: train patch_proj and image_proj (mrad-ft stage)
     # 第一阶段优化器：训练 patch_proj 和 image_proj
     optimizer_ft = torch.optim.Adam(
-        list(patch_proj.parameters()) + list(image_proj.parameters()),
+        list(patch_proj.parameters()) + list(image_proj.parameters()) +
+        list(patch_cross_attn.parameters()) + list(image_cross_attn.parameters()),
         lr=args.learning_rate, betas=(0.5, 0.999)
     )
     # Cosine learning rate decay only for standalone mrad-ft training
@@ -127,6 +134,9 @@ def train(args):
         model.eval()
         patch_proj.train()
         image_proj.train()
+        # 交叉注意力模块在 FT 阶段参与训练
+        patch_cross_attn.train()
+        image_cross_attn.train()
 
         # mrad-clip 模式下，prompt 相关模块也设为训练模式
         if model_type == 'mrad-clip':
@@ -173,7 +183,8 @@ def train(args):
             seg_logit, patch_f_bia, _, _ = compute_patch_socre(
                 patch_f_bia, cache_keys_patch, cache_values_patch,
                 device=device, proj=patch_proj, need_mask=True,
-                patch_projection=patch_pojection, use_proj=True
+                patch_projection=patch_pojection, use_proj=True,
+                cross_attn=patch_cross_attn
             )
             # 将分割 logits 转换为相似度图
             seg_similarity_map = AnomalyCLIP_lib.get_similarity_map(seg_logit, args.image_size).permute(0, 3, 1, 2)
@@ -190,7 +201,7 @@ def train(args):
                 # Classification loss
                 # 计算图像级分类损失
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                logits, _ = compute_socre(image_features, cache_keys, cache_values, device, proj=image_proj, need_mask=True, is_train=False)
+                logits, _ = compute_socre(image_features, cache_keys, cache_values, device, proj=image_proj, need_mask=True, is_train=False, cross_attn=image_cross_attn)
                 logits = logits / 0.07
                 image_loss = F.cross_entropy(logits.squeeze(), label.long().to(device))
 
@@ -212,6 +223,11 @@ def train(args):
                 # Freeze patch_proj
                 # 冻结 patch_proj 参数，不再更新
                 for param in patch_proj.parameters():
+                    param.requires_grad = False
+                # 同时冻结交叉注意力模块（CLIP 阶段不参与训练）
+                for param in patch_cross_attn.parameters():
+                    param.requires_grad = False
+                for param in image_cross_attn.parameters():
                     param.requires_grad = False
 
                 # 通过 prompt_proj 计算 bias，并由 prompt_learner 生成可学习 prompt
@@ -277,7 +293,9 @@ def train(args):
                 ckp_path = os.path.join(args.save_path, f'mrad_ft_epoch_{epoch + 1}.pth')
                 torch.save({
                     "image_proj": image_proj.state_dict(),
-                    "patch_proj": patch_proj.state_dict()
+                    "patch_proj": patch_proj.state_dict(),
+                    "patch_cross_attn": patch_cross_attn.state_dict(),
+                    "image_cross_attn": image_cross_attn.state_dict()
                 }, ckp_path)
             else:  # mrad-clip
                 # mrad-clip 模式：保存所有可训练模块
@@ -286,7 +304,9 @@ def train(args):
                     "prompt_learner": prompt_learner.state_dict(),
                     "prompt_proj": prompt_proj.state_dict(),
                     "image_proj": image_proj.state_dict(),
-                    "patch_proj": patch_proj.state_dict()
+                    "patch_proj": patch_proj.state_dict(),
+                    "patch_cross_attn": patch_cross_attn.state_dict(),
+                    "image_cross_attn": image_cross_attn.state_dict()
                 }, ckp_path)
 
     # Final save
@@ -296,7 +316,9 @@ def train(args):
         final_path = os.path.join(args.save_path, 'mrad_ft_final.pth')
         torch.save({
             "image_proj": image_proj.state_dict(),
-            "patch_proj": patch_proj.state_dict()
+            "patch_proj": patch_proj.state_dict(),
+            "patch_cross_attn": patch_cross_attn.state_dict(),
+            "image_cross_attn": image_cross_attn.state_dict()
         }, final_path)
         logger.info(f'MRAD-FT model saved to {final_path}')
     else:
@@ -306,7 +328,9 @@ def train(args):
             "prompt_learner": prompt_learner.state_dict(),
             "prompt_proj": prompt_proj.state_dict(),
             "image_proj": image_proj.state_dict(),
-            "patch_proj": patch_proj.state_dict()
+            "patch_proj": patch_proj.state_dict(),
+            "patch_cross_attn": patch_cross_attn.state_dict(),
+            "image_cross_attn": image_cross_attn.state_dict()
         }, final_path)
         logger.info(f'MRAD-CLIP model saved to {final_path}')
 

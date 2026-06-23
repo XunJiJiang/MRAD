@@ -142,11 +142,22 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
 # ============================================================
 # compute_socre: 图像级分类评分（基于记忆库的相似度检索）
 # ============================================================
-def compute_socre(image_features, cache_keys, cache_values, device, proj=None, need_mask=False, is_train=False, use_proj=True):
+def compute_socre(image_features, cache_keys, cache_values, device, proj=None, need_mask=False, is_train=False, use_proj=True, cross_attn=None):
+    loss_keys = torch.tensor(0.0, device=device)
+
+    # --- 分支1: 使用交叉注意力替代 softmax(QK^T)@V ---
+    if cross_attn is not None:
+        # 将图像特征扩展为序列维度： (B, 768) → (B, 1, 768)
+        image_features_q = image_features.unsqueeze(1)
+        # 交叉注意力检索：query 对 memory bank 做 cross-attention 后分类
+        logits = cross_attn(image_features_q, cache_keys)  # (B, 1, 2)
+        logits = logits.squeeze(1)  # (B, 2)
+        return logits, loss_keys
+
+    # --- 分支2: 原始 softmax(QK^T)@V 检索（向后兼容） ---
     # scale = 768**-0.5
     # 计算图像特征与记忆库 keys 的原始余弦相似度
     ori_sim_weights = torch.matmul(image_features, cache_keys.to(device).t())#b n
-    loss_keys = torch.tensor(0.0, device=device)
 
     # 如果启用投影适配器，对特征进行投影后再计算相似度
     if use_proj and proj is not None:
@@ -177,37 +188,49 @@ def compute_socre(image_features, cache_keys, cache_values, device, proj=None, n
 # ============================================================
 def compute_patch_socre(patch_features, cache_keys, cache_values, ori_sim_weights=None,
         device=None, proj=None, need_mask=False, patch_projection=False, gt_mask=None,
-        anomaly_threshold=0.5, is_mradft=False, use_proj=True):
+        anomaly_threshold=0.5, is_mradft=False, use_proj=True, cross_attn=None):
 
-    # 计算每个 patch 特征与记忆库 keys 的原始相似度
-    ori_sim_weights = torch.matmul(patch_features, cache_keys.to(device).t())#b 1369 n
+    # --- 分支1: 使用交叉注意力替代 softmax(QK^T)@V ---
+    if cross_attn is not None:
+        # 交叉注意力检索：query patch features 对 memory bank 做 cross-attention
+        # patch_features: (B, 1369, 768)，cache_keys: (N_mem, 768)
+        # cross_attn 内部将 memory 扩展为 (B, N_mem, 768) 后做 MHA
+        logits = cross_attn(patch_features, cache_keys)  # (B, 1369, 2)
+        # 交叉注意力模式下无原始相似度权重，返回 None 保持调用签名兼容
+        ori_sim_weights_out = None
+        finetune_sim_weights = None
 
-    # 如果启用投影适配器，分别对 patch 特征和记忆库 keys 投影后再计算相似度
-    if use_proj and proj is not None:
-        patch_features_proj = proj(patch_features, 0)
-        cache_keys_proj = proj(cache_keys, 1)
-        sim_weights = torch.matmul(patch_features_proj, cache_keys_proj.T.to(device))# b 1369 n
     else:
-        sim_weights = ori_sim_weights
+        # --- 分支2: 原始 softmax(QK^T)@V 检索（向后兼容） ---
+        # 计算每个 patch 特征与记忆库 keys 的原始相似度
+        ori_sim_weights_out = torch.matmul(patch_features, cache_keys.to(device).t())#b 1369 n
 
-    # 保存微调阶段的相似度副本
-    finetune_sim_weights = sim_weights.clone()
-    # 如果启用 mask 机制，过滤掉相似度过高的 patch（防止过拟合）
-    if need_mask:
-        # 取原始相似度 80% 分位数作为阈值
-        th = torch.quantile(ori_sim_weights, 0.8, dim=-1, keepdim=True)
-        mask = ori_sim_weights > th#test mvtec     when test visa be setted  0.85 memclip be setted 0.95
-        mask_counts = mask.sum(dim=1)
-        # print(mask_counts)
-        # mask = mask.unsqueeze(1).expand(-1, patch_features.size(1), -1)
-        # 将高于阈值的相似度置为 -inf
-        sim_weights = sim_weights.masked_fill(mask, float('-inf')) 
-    # similary_sum = torch.matmul(sim_weights, cache_values.to(device).float())# b 1369 2
+        # 如果启用投影适配器，分别对 patch 特征和记忆库 keys 投影后再计算相似度
+        if use_proj and proj is not None:
+            patch_features_proj = proj(patch_features, 0)
+            cache_keys_proj = proj(cache_keys, 1)
+            sim_weights = torch.matmul(patch_features_proj, cache_keys_proj.T.to(device))# b 1369 n
+        else:
+            sim_weights = ori_sim_weights_out
 
-    # 对相似度权重做 softmax 归一化
-    sim_weights = F.softmax(sim_weights, dim=-1)
-    # 加权求和得到每个 patch 的正常/异常 logits
-    logits = torch.matmul(sim_weights, cache_values.to(device).float())  # (b, 1369, 2)
+        # 保存微调阶段的相似度副本
+        finetune_sim_weights = sim_weights.clone()
+        # 如果启用 mask 机制，过滤掉相似度过高的 patch（防止过拟合）
+        if need_mask:
+            # 取原始相似度 80% 分位数作为阈值
+            th = torch.quantile(ori_sim_weights_out, 0.8, dim=-1, keepdim=True)
+            mask = ori_sim_weights_out > th#test mvtec     when test visa be setted  0.85 memclip be setted 0.95
+            mask_counts = mask.sum(dim=1)
+            # print(mask_counts)
+            # mask = mask.unsqueeze(1).expand(-1, patch_features.size(1), -1)
+            # 将高于阈值的相似度置为 -inf
+            sim_weights = sim_weights.masked_fill(mask, float('-inf')) 
+        # similary_sum = torch.matmul(sim_weights, cache_values.to(device).float())# b 1369 2
+
+        # 对相似度权重做 softmax 归一化
+        sim_weights = F.softmax(sim_weights, dim=-1)
+        # 加权求和得到每个 patch 的正常/异常 logits
+        logits = torch.matmul(sim_weights, cache_values.to(device).float())  # (b, 1369, 2)
 
     # anomaly_weights = logits[:, :, 1]  # (b, 1369)
     # anomaly_weights = logits.permute(0, 2, 1)  # (b,2, 1369)
@@ -216,8 +239,7 @@ def compute_patch_socre(patch_features, cache_keys, cache_values, ori_sim_weight
     # new_patch_features = torch.matmul(new_weights, patch_projection)  # (b, 2, 768)
     # new_patch_features = 0
 
-
-    # 如果不是 MRAD 微调模式，计算异常和正常的 token 特征用于后续处理
+    # --- 共享: 从 logits 计算异常/正常 token 特征（两分支共用） ---
     if not is_mradft:
         # 提取异常概率（logits 中第 1 类为异常）
         anomaly_probs = logits[:, :, 1]
@@ -253,4 +275,4 @@ def compute_patch_socre(patch_features, cache_keys, cache_values, ori_sim_weight
     else:
         new_patch_features = 0
         # print("new_patch_features is 0")
-    return logits,new_patch_features,ori_sim_weights,finetune_sim_weights
+    return logits, new_patch_features, ori_sim_weights_out, finetune_sim_weights
