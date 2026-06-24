@@ -192,10 +192,16 @@ def compute_patch_socre(patch_features, cache_keys, cache_values, ori_sim_weight
 
     # --- 分支1: 使用交叉注意力替代 softmax(QK^T)@V ---
     if cross_attn is not None:
+        # 投影：ViT-L patch 特征为 1024 维，需经 proj 映射到 768 维后才能送入 cross_attn
+        # 与 softmax 分支保持一致：proj(·, 0) 处理 patch_features，proj(·, 1) 处理 cache_keys
+        if use_proj and proj is not None:
+            patch_features_proj = proj(patch_features, 0)   # (B, 1369, 1024) → (B, 1369, 768)
+            cache_keys_proj = proj(cache_keys, 1)           # (N_mem, 1024) → (N_mem, 768)
+        else:
+            patch_features_proj = patch_features
+            cache_keys_proj = cache_keys
         # 交叉注意力检索：query patch features 对 memory bank 做 cross-attention
-        # patch_features: (B, 1369, 768)，cache_keys: (N_mem, 768)
-        # cross_attn 内部将 memory 扩展为 (B, N_mem, 768) 后做 MHA
-        logits = cross_attn(patch_features, cache_keys)  # (B, 1369, 2)
+        logits = cross_attn(patch_features_proj, cache_keys_proj)  # (B, 1369, 2)
         # 交叉注意力模式下无原始相似度权重，返回 None 保持调用签名兼容
         ori_sim_weights_out = None
         finetune_sim_weights = None
