@@ -50,7 +50,7 @@ parse_gpu_list() {
 latest_checkpoint=""
 latest_number=-1
 shopt -s nullglob
-for dir in ${CHECKPOINT_DIR}_*/; do
+for dir in ${CHECKPOINT_DIR}/*/; do
   if [ -d "$dir" ]; then
     dir_name=$(basename "$dir")
     dir_number=$(echo "$dir_name" | grep -oE '[0-9]+')
