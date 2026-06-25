@@ -79,7 +79,15 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             for items in tqdm(train_loader_cache):
                 images = items['img'].to(device)
                 labels =  items['anomaly'].to(device)# b
-                gt = items['img_mask'].squeeze().to(device) # b 518 518
+                gt = items['img_mask'].to(device)
+                # 统一处理多种可能的输入 shape：
+                #   (B, 1, H, W) -> squeeze channel -> (B, H, W)
+                #   (B, H, W)    -> 保持不变
+                #   (H, W)       -> 添加 batch 维度 -> (1, H, W)
+                if gt.dim() == 4 and gt.size(1) == 1:
+                    gt = gt.squeeze(1)
+                elif gt.dim() == 2:
+                    gt = gt.unsqueeze(0)
                 # 将 ground truth mask 二值化：>0.5 视为异常，<=0.5 视为正常
                 gt[gt > 0.5] = 1
                 gt[gt <= 0.5] = 0
