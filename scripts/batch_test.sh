@@ -54,8 +54,8 @@ for ((i=FROM_IDX; i<=TO_IDX; i++)); do
       --cache_dir "$CACHE_DIR" \
       --save_path "${LOG_DIR}/results" \
       --device "$TRAIN_GPU" \
-      --checkpoint_path "${CHECKPOINT_DIR}_$i/mrad_clip_final.pth" \
+      --checkpoint_path "${CHECKPOINT_DIR}/$i/mrad_clip_final.pth" \
       --model_index "$i"
 done
 
-echo "Batch training completed."
+echo "Batch testing completed."
