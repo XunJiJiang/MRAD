@@ -301,7 +301,7 @@ Multi-scale Memory Retrieval
 
 # 方案4：加入Cross-Attention
 
-> 使用 deepseek 尝试修改, 在 Cross-Attention 分支
+> 使用 deepseek 尝试修改, 在 Cross-Attention 分支  分数没有提升, 反而下降了
 
 MRAD Retrieval：
 
