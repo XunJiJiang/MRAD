@@ -13,6 +13,7 @@ import numpy as np
 import os
 import random
 from models.mlp import AnomalyMLP, MLP, Projector, average_neighbor
+from models.gnn_memory import GraphMemoryBank
 from mrad import build_cache_model, compute_socre, compute_patch_socre, build_patch_cache_model
 
 # 固定随机种子，确保实验可复现
@@ -59,6 +60,18 @@ def train(args):
     patch_proj.to(device)
     image_proj.to(device)
 
+    # 初始化 GNN 记忆增强模块（仅当 use_gnn=True 时）
+    if args.use_gnn:
+        gnn_memory = GraphMemoryBank(
+            in_dim=1024, hidden_dim=512, out_dim=1024,
+            num_layers=args.gnn_layers, gnn_type=args.gnn_type,
+            heads=args.gnn_heads, topk_neighbors=args.gnn_topk,
+            dropout=0.1
+        )
+        gnn_memory.to(device)
+    else:
+        gnn_memory = None
+
     # mrad-clip requires additional components
     # mrad-clip 模式下需要额外的 prompt 相关组件
     if model_type == 'mrad-clip':
@@ -86,7 +99,8 @@ def train(args):
     # 构建 patch 级记忆库（用于异常分割）
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
         load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
-        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
+        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
+        gnn_memory=gnn_memory
     )
     # 打印记忆库维度信息
     print(f"cache_key: {cache_keys.shape}")
@@ -102,7 +116,7 @@ def train(args):
     # Stage 1 optimizer: train patch_proj and image_proj (mrad-ft stage)
     # 第一阶段优化器：训练 patch_proj 和 image_proj
     optimizer_ft = torch.optim.Adam(
-        list(patch_proj.parameters()) + list(image_proj.parameters()),
+        list(patch_proj.parameters()) + list(image_proj.parameters()) + (list(gnn_memory.parameters()) if gnn_memory is not None else []),
         lr=args.learning_rate, betas=(0.5, 0.999)
     )
     # Cosine learning rate decay only for standalone mrad-ft training
@@ -275,39 +289,55 @@ def train(args):
             # mrad-ft 模式：仅保存 patch_proj 和 image_proj
             if model_type == 'mrad-ft':
                 ckp_path = os.path.join(args.save_path, f'mrad_ft_epoch_{epoch + 1}.pth')
-                torch.save({
+                save_dict = {
                     "image_proj": image_proj.state_dict(),
                     "patch_proj": patch_proj.state_dict()
-                }, ckp_path)
+                }
+                # 如果启用了 GNN 记忆增强，保存 gnn_memory 权重
+                if gnn_memory is not None:
+                    save_dict["gnn_memory"] = gnn_memory.state_dict()
+                torch.save(save_dict, ckp_path)
             else:  # mrad-clip
                 # mrad-clip 模式：保存所有可训练模块
                 ckp_path = os.path.join(args.save_path, f'mrad_clip_epoch_{epoch + 1}.pth')
-                torch.save({
+                save_dict = {
                     "prompt_learner": prompt_learner.state_dict(),
                     "prompt_proj": prompt_proj.state_dict(),
                     "image_proj": image_proj.state_dict(),
                     "patch_proj": patch_proj.state_dict()
-                }, ckp_path)
+                }
+                # 如果启用了 GNN 记忆增强，保存 gnn_memory 权重
+                if gnn_memory is not None:
+                    save_dict["gnn_memory"] = gnn_memory.state_dict()
+                torch.save(save_dict, ckp_path)
 
     # Final save
     # 训练结束后保存最终模型
     if model_type == 'mrad-ft':
         # 保存 MRAD-FT 最终模型
         final_path = os.path.join(args.save_path, 'mrad_ft_final.pth')
-        torch.save({
+        save_dict = {
             "image_proj": image_proj.state_dict(),
             "patch_proj": patch_proj.state_dict()
-        }, final_path)
+        }
+        # 如果启用了 GNN 记忆增强，保存 gnn_memory 权重
+        if gnn_memory is not None:
+            save_dict["gnn_memory"] = gnn_memory.state_dict()
+        torch.save(save_dict, final_path)
         logger.info(f'MRAD-FT model saved to {final_path}')
     else:
         # 保存 MRAD-CLIP 最终模型
         final_path = os.path.join(args.save_path, 'mrad_clip_final.pth')
-        torch.save({
+        save_dict = {
             "prompt_learner": prompt_learner.state_dict(),
             "prompt_proj": prompt_proj.state_dict(),
             "image_proj": image_proj.state_dict(),
             "patch_proj": patch_proj.state_dict()
-        }, final_path)
+        }
+        # 如果启用了 GNN 记忆增强，保存 gnn_memory 权重
+        if gnn_memory is not None:
+            save_dict["gnn_memory"] = gnn_memory.state_dict()
+        torch.save(save_dict, final_path)
         logger.info(f'MRAD-CLIP model saved to {final_path}')
 
     # 保存参数
@@ -357,6 +387,17 @@ if __name__ == '__main__':
     parser.add_argument("--save_freq", type=int, default=1, help="save frequency")
     parser.add_argument("--seed", type=int, default=111, help="random seed")
     parser.add_argument("--device", type=str, default='cuda:1')
+    # GNN memory bank parameters
+    parser.add_argument("--use_gnn", type=bool, default=False,
+        help="whether to use GNN-enhanced memory bank")
+    parser.add_argument("--gnn_type", type=str, default='gat', choices=['gcn', 'gat'],
+        help="GNN type: gcn or gat")
+    parser.add_argument("--gnn_layers", type=int, default=2,
+        help="number of GNN layers")
+    parser.add_argument("--gnn_heads", type=int, default=4,
+        help="number of GAT attention heads (ignored for gcn)")
+    parser.add_argument("--gnn_topk", type=int, default=10,
+        help="top-k neighbors for graph construction")
 
     # 解析命令行参数
     args = parser.parse_args()

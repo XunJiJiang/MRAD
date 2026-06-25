@@ -7,9 +7,9 @@ source "${PROJECT_DIR}/.venv/bin/activate"
 MODEL_TYPE="mrad-clip"
 
 # Path configuration
-CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}"
-LOG_DIR="${PROJECT_DIR}/logs/released_${MODEL_TYPE}"
-CACHE_DIR="${PROJECT_DIR}/cache"
+CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/released_${MODEL_TYPE}-Graph-Memory"
+LOG_DIR="${PROJECT_DIR}/logs/released_${MODEL_TYPE}-Graph-Memory"
+CACHE_DIR="${PROJECT_DIR}/cache/Graph-Memory"
 TRAIN_SCRIPT="${PROJECT_DIR}/train.py"
 TEST_SCRIPT="${PROJECT_DIR}/test.py"
 

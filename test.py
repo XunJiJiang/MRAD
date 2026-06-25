@@ -16,6 +16,7 @@ import random
 import numpy as np
 from tabulate import tabulate
 from mrad import build_cache_model,compute_socre,compute_patch_socre,build_patch_cache_model# ,similarity_experiment
+from models.gnn_memory import GraphMemoryBank
 from utils.visualization import visualizer
 from utils.metrics import image_level_metrics, pixel_level_metrics
 from scipy.ndimage import gaussian_filter
@@ -104,11 +105,27 @@ def test(args):
         prompt_proj.load_state_dict(checkpoint["prompt_proj"])
         prompt_proj.to(device)
 
+    # 初始化 GNN 记忆增强模块（仅当 use_gnn=True 时）
+    if args.use_gnn:
+        gnn_memory = GraphMemoryBank(
+            in_dim=1024, hidden_dim=512, out_dim=1024,
+            num_layers=args.gnn_layers, gnn_type=args.gnn_type,
+            heads=args.gnn_heads, topk_neighbors=args.gnn_topk,
+            dropout=0.1
+        )
+        # 从 checkpoint 加载已训练的 GNN 权重（mrad-tf 无 checkpoint，跳过）
+        if model_type in ['mrad-clip', 'mrad-ft'] and "gnn_memory" in checkpoint:
+            gnn_memory.load_state_dict(checkpoint["gnn_memory"])
+        gnn_memory.to(device)
+        gnn_memory.eval()
+    else:
+        gnn_memory = None
+
     model.to(device)
     model.visual.DAPM_replace(DPAM_layer = 24)
 
     cache_key, cache_value = build_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'))
-    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'))
+    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'), gnn_memory=gnn_memory)
     print(f"cache_key:{cache_key.shape}")
     print(f"cache_keys_patch:{cache_keys_patch.shape}")
 
@@ -334,6 +351,17 @@ if __name__ == '__main__':
 
     # 模型索引
     parser.add_argument("--model_index", type=int, default=0, help="model index for logging")
+    # GNN memory bank parameters
+    parser.add_argument("--use_gnn", type=bool, default=False,
+        help="whether to use GNN-enhanced memory bank")
+    parser.add_argument("--gnn_type", type=str, default='gat', choices=['gcn', 'gat'],
+        help="GNN type: gcn or gat")
+    parser.add_argument("--gnn_layers", type=int, default=2,
+        help="number of GNN layers")
+    parser.add_argument("--gnn_heads", type=int, default=4,
+        help="number of GAT attention heads (ignored for gcn)")
+    parser.add_argument("--gnn_topk", type=int, default=10,
+        help="top-k neighbors for graph construction")
 
     args = parser.parse_args()
     print(args)

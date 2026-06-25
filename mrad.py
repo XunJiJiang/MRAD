@@ -63,7 +63,7 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
 # ============================================================
 # build_patch_cache_model: 构建 patch 级记忆库（逐样本收集正常/异常 patch 的均值特征）
 # ============================================================
-def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None):
+def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None, gnn_memory=None):
     cache_dir = dir
     # --- 分支1: 从头构建 patch 级记忆库 ---
     if load_cache == False:    
@@ -129,14 +129,20 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             "values": cache_values
         }
 
-        # 保存 patch 级记忆库到磁盘
+        # 保存 patch 级记忆库到磁盘（保存原始原型，不包含 GNN 增强）
         torch.save({"keys": cache_keys.cpu(), "values": cache_values.cpu()}, cache_dir)
+        # 如果提供了 GNN 记忆增强模块，对记忆原型做图消息传递增强
+        if gnn_memory is not None:
+            cache_keys = gnn_memory(cache_keys)
 
     # --- 分支2: 从磁盘加载已有 patch 级记忆库 ---
     else:
         cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
+        # 如果提供了 GNN 记忆增强模块，对记忆原型做图消息传递增强
+        if gnn_memory is not None:
+            cache_keys = gnn_memory(cache_keys)
     return cache_keys, cache_values
 
 # ============================================================
