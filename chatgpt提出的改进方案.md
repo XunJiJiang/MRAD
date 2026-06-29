@@ -413,7 +413,7 @@ DINOv2通常优于CLIP。
 
 # 方案6：图神经网络Memory（高级创新）
 
-> deepseek 尝试修改, 在 Graph-Memory 分支
+> deepseek 尝试修改, 在 Graph-Memory 分支 分数没有提升, 反而下降了
 
 Memory里的prototype之间：
 
