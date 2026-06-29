@@ -108,16 +108,20 @@ def train(args):
     # Load memory bank
     # ================================================================
     # 构建图像级记忆库（用于异常分类）
+    # 自动检测缓存文件是否存在：存在则加载，不存在则首次构建
+    image_cache_path = os.path.join(args.cache_dir, f'cache_model_{dataset_name}.pt')
     cache_keys, cache_values = build_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
-        device=device,
-        dir=os.path.join(args.cache_dir, f'cache_model_{dataset_name}.pt')
+        load_cache=os.path.exists(image_cache_path),
+        clip_model=model, train_loader_cache=train_dataloader,
+        device=device, dir=image_cache_path
     )
     # 构建 patch 级记忆库（多尺度 + KMeans 聚类）
+    # 自动检测缓存文件是否存在：存在则加载，不存在则首次构建
+    patch_cache_path = os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
     cache_keys_patch = build_patch_cache_model(
-        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
-        device=device,
-        dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
+        load_cache=os.path.exists(patch_cache_path),
+        clip_model=model, train_loader_cache=train_dataloader,
+        device=device, dir=patch_cache_path,
         k_clusters=args.k_clusters,
         use_kmeans=args.use_kmeans,
         multi_scale=args.multi_scale,

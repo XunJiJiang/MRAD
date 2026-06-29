@@ -142,16 +142,26 @@ def test(args):
     # ================================================================
     # 构建图像级记忆库
     # ================================================================
+    image_cache_path = os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt')
+    if not os.path.exists(image_cache_path):
+        raise FileNotFoundError(
+            f"图像级缓存文件不存在: {image_cache_path}\n"
+            f"请先运行 train.py 构建记忆库缓存。"
+        )
     cache_key, cache_value = build_cache_model(
         load_cache=True, clip_model=model, train_loader_cache=None,
-        device=device,
-        dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt')
+        device=device, dir=image_cache_path
     )
     # 构建 patch 级记忆库（多尺度 + KMeans 聚类）
+    patch_cache_path = os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt')
+    if not os.path.exists(patch_cache_path):
+        raise FileNotFoundError(
+            f"Patch 级缓存文件不存在: {patch_cache_path}\n"
+            f"请先运行 train.py 构建记忆库缓存。"
+        )
     cache_keys_patch = build_patch_cache_model(
-        load_cache=False, clip_model=model, train_loader_cache=test_dataloader,
-        device=device,
-        dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'),
+        load_cache=True, clip_model=model, train_loader_cache=None,
+        device=device, dir=patch_cache_path,
         k_clusters=args.k_clusters if hasattr(args, 'k_clusters') else 8,
         use_kmeans=args.use_kmeans if hasattr(args, 'use_kmeans') else True,
         multi_scale=args.multi_scale,
