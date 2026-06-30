@@ -99,8 +99,7 @@ def train(args):
     # 构建 patch 级记忆库（用于异常分割）
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
         load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
-        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
-        gnn_memory=gnn_memory
+        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
     )
     # 打印记忆库维度信息
     print(f"cache_key: {cache_keys.shape}")
@@ -184,8 +183,10 @@ def train(args):
 
             # Compute segmentation logits
             # 计算 patch 级的异常分割 logits
+            # GNN 记忆增强：每个 batch 重新前向传播，确保梯度正确流动
+            refined_keys_patch = gnn_memory(cache_keys_patch) if gnn_memory is not None else cache_keys_patch
             seg_logit, patch_f_bia, _, _ = compute_patch_socre(
-                patch_f_bia, cache_keys_patch, cache_values_patch,
+                patch_f_bia, refined_keys_patch, cache_values_patch,
                 device=device, proj=patch_proj, need_mask=True,
                 patch_projection=patch_pojection, use_proj=True
             )

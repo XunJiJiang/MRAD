@@ -125,7 +125,10 @@ def test(args):
     model.visual.DAPM_replace(DPAM_layer = 24)
 
     cache_key, cache_value = build_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'))
-    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=False, clip_model=model, train_loader_cache=test_dataloader, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'), gnn_memory=gnn_memory)
+    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=False, clip_model=model, train_loader_cache=test_dataloader, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'))
+    # GNN 记忆增强：对原始原型做图消息传递（推理时只需计算一次）
+    if gnn_memory is not None:
+        cache_keys_patch = gnn_memory(cache_keys_patch)
     print(f"cache_key:{cache_key.shape}")
     print(f"cache_keys_patch:{cache_keys_patch.shape}")
 
