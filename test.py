@@ -352,7 +352,7 @@ if __name__ == '__main__':
     # 模型索引
     parser.add_argument("--model_index", type=int, default=0, help="model index for logging")
     # GNN memory bank parameters
-    parser.add_argument("--use_gnn", type=bool, default=False,
+    parser.add_argument("--use_gnn", type=bool, default=True,
         help="whether to use GNN-enhanced memory bank")
     parser.add_argument("--gnn_type", type=str, default='gat', choices=['gcn', 'gat'],
         help="GNN type: gcn or gat")

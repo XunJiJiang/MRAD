@@ -388,7 +388,7 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=111, help="random seed")
     parser.add_argument("--device", type=str, default='cuda:1')
     # GNN memory bank parameters
-    parser.add_argument("--use_gnn", type=bool, default=False,
+    parser.add_argument("--use_gnn", type=bool, default=True,
         help="whether to use GNN-enhanced memory bank")
     parser.add_argument("--gnn_type", type=str, default='gat', choices=['gcn', 'gat'],
         help="GNN type: gcn or gat")
