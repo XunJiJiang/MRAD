@@ -110,7 +110,7 @@ def test(args):
     # 加载记忆库（传入压缩参数，on-the-fly 压缩，不修改磁盘 .pt 文件）
     # 测试时使用与训练相同的压缩配置，确保记忆库一致性
     cache_key, cache_value = build_cache_model(
-        load_cache=False, clip_model=model, train_loader_cache=None, device=device,
+        load_cache=False, clip_model=model, train_loader_cache=test_dataloader, device=device,
         dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'),
         compress_method=args.compress_method, n_prototypes=args.n_prototypes
     )
