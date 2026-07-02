@@ -55,7 +55,9 @@ for ((i=FROM_IDX; i<=TO_IDX; i++)); do
       --save_path "${LOG_DIR}/results" \
       --device "$TRAIN_GPU" \
       --checkpoint_path "${CHECKPOINT_DIR}/$i/mrad_clip_final.pth" \
-      --model_index "$i"
+      --model_index "$i" \
+      --compress_method "$COMPRESS_METHOD" \
+      --n_prototypes "$N_PROTOTYPES"
 done
 
 echo "Batch testing completed."

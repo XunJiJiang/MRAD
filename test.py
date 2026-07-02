@@ -107,8 +107,18 @@ def test(args):
     model.to(device)
     model.visual.DAPM_replace(DPAM_layer = 24)
 
-    cache_key, cache_value = build_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'))
-    cache_keys_patch, cache_values_patch = build_patch_cache_model(load_cache=True, clip_model=model, train_loader_cache=None, device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'))
+    # 加载记忆库（传入压缩参数，on-the-fly 压缩，不修改磁盘 .pt 文件）
+    # 测试时使用与训练相同的压缩配置，确保记忆库一致性
+    cache_key, cache_value = build_cache_model(
+        load_cache=False, clip_model=model, train_loader_cache=None, device=device,
+        dir=os.path.join(args.cache_dir, f'cache_model_{cache_name}.pt'),
+        compress_method=args.compress_method, n_prototypes=args.n_prototypes
+    )
+    cache_keys_patch, cache_values_patch = build_patch_cache_model(
+        load_cache=False, clip_model=model, train_loader_cache=test_dataloader, device=device,
+        dir=os.path.join(args.cache_dir, f'cache_patch_model_{cache_name}.pt'),
+        compress_method=args.compress_method, n_prototypes=args.n_prototypes
+    )
     print(f"cache_key:{cache_key.shape}")
     print(f"cache_keys_patch:{cache_keys_patch.shape}")
 
@@ -331,6 +341,19 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default='mrad-clip',
         choices=['mrad-clip', 'mrad-ft', 'mrad-tf'],
         help='Model type: mrad-clip (full), mrad-ft (fine-tuned), mrad-tf (train-free)')
+
+    # Memory bank compression parameters
+    # 记忆库压缩参数：将原始 Memory Bank 压缩为代表性原型，减少冗余
+    # 测试时必须与训练使用相同的压缩配置，确保记忆库一致性
+    parser.add_argument("--compress_method", type=str, default='none',
+                        choices=['none', 'kmeans', 'greedy', 'herding'],
+                        help='Memory bank compression method: none (no compression), '
+                             'kmeans (MiniBatchKMeans clustering), '
+                             'greedy (farthest-first / k-center greedy), '
+                             'herding (herding selection)')
+    parser.add_argument("--n_prototypes", type=int, default=500,
+                        help='Number of prototypes per class after compression '
+                             '(e.g. 500 means 500 normal + 500 anomaly = 1000 total)')
 
     # 模型索引
     parser.add_argument("--model_index", type=int, default=0, help="model index for logging")

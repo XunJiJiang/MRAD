@@ -79,14 +79,18 @@ def train(args):
 
     # Load memory bank
     # 构建图像级记忆库（用于异常分类）
+    # 传入 compress_method/n_prototypes 参数控制记忆库压缩（on-the-fly，不修改磁盘 .pt 文件）
     cache_keys, cache_values = build_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
-        device=device, dir=os.path.join(args.cache_dir, f'cache_model_{dataset_name}.pt')
+        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
+        device=device, dir=os.path.join(args.cache_dir, f'cache_model_{dataset_name}.pt'),
+        compress_method=args.compress_method, n_prototypes=args.n_prototypes
     )
     # 构建 patch 级记忆库（用于异常分割）
+    # 同样传入压缩参数，与图像级记忆库使用相同的压缩配置
     cache_keys_patch, cache_values_patch = build_patch_cache_model(
-        load_cache=True, clip_model=model, train_loader_cache=train_dataloader,
-        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt')
+        load_cache=False, clip_model=model, train_loader_cache=train_dataloader,
+        device=device, dir=os.path.join(args.cache_dir, f'cache_patch_model_{dataset_name}.pt'),
+        compress_method=args.compress_method, n_prototypes=args.n_prototypes
     )
     # 打印记忆库维度信息
     print(f"cache_key: {cache_keys.shape}")
@@ -323,6 +327,8 @@ def train(args):
         f.write(f"Feature Map Layers: {args.feature_map_layer}\n")
         f.write(f"Features List: {args.features_list}\n")
         f.write(f"Seed: {args.seed}\n")
+        f.write(f"Compress Method: {args.compress_method}\n")
+        f.write(f"N Prototypes (per class): {args.n_prototypes}\n")
     logger.info(f'Training parameters saved to {params_path}')
 
 # 程序入口
@@ -356,6 +362,21 @@ if __name__ == '__main__':
     parser.add_argument("--print_freq", type=int, default=1, help="print frequency")
     parser.add_argument("--save_freq", type=int, default=1, help="save frequency")
     parser.add_argument("--seed", type=int, default=111, help="random seed")
+
+    # Memory bank compression parameters
+    # 记忆库压缩参数：将原始 Memory Bank 压缩为代表性原型，减少冗余
+    # 论文动机：作者 ablation 证明 Memory 大幅减少后性能几乎不掉，说明存在大量冗余
+    # 流程：Original Memory → Representative Prototype → Retrieval
+    parser.add_argument("--compress_method", type=str, default='none',
+                        choices=['none', 'kmeans', 'greedy', 'herding'],
+                        help='Memory bank compression method: none (no compression), '
+                             'kmeans (MiniBatchKMeans clustering), '
+                             'greedy (farthest-first / k-center greedy), '
+                             'herding (herding selection)')
+    parser.add_argument("--n_prototypes", type=int, default=500,
+                        help='Number of prototypes per class after compression '
+                             '(e.g. 500 means 500 normal + 500 anomaly = 1000 total)')
+
     parser.add_argument("--device", type=str, default='cuda:1')
 
     # 解析命令行参数

@@ -9,14 +9,204 @@ from models.mlp import average_neighbor
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-# 导入 KMeans 聚类算法（用于记忆库构建中的聚类操作）
-from sklearn.cluster import KMeans
+# 导入 numpy 用于压缩算法中的数值计算（CPU 侧操作，避免 GPU OOM）
+import numpy as np
+# 导入 MiniBatchKMeans 聚类算法（用于记忆库压缩中的 KMeans 方法）
+from sklearn.cluster import MiniBatchKMeans
+
+
+# ============================================================
+# 记忆库压缩模块：支持 KMeans / Greedy Prototype / Herding 三种方法
+# 论文动机：原 Memory Bank 存在大量冗余（作者 ablation 证明 Memory 减少很多性能几乎不掉），
+#           因此先将全部样本压缩为代表性原型，再进行检索，几乎不改主网络。
+# 流程： Original Memory → Representative Prototype → Retrieval
+# ============================================================
+
+def _kmeans_compress(keys_np, n_prototypes, seed=42):
+    """KMeans 聚类压缩：对每类样本做 MiniBatchKMeans，取聚类中心作为代表性原型。
+
+    Args:
+        keys_np: (N, D) numpy float32 数组，单类样本特征
+        n_prototypes: 目标原型数量
+        seed: 随机种子，保证可复现
+
+    Returns:
+        (n_prototypes, D) numpy 数组，聚类中心
+    """
+    # 确保聚类数不超过实际样本数
+    n_actual = min(n_prototypes, len(keys_np))
+    # 使用 MiniBatchKMeans，batch_size 自适应，适合大规模记忆库
+    kmeans = MiniBatchKMeans(
+        n_clusters=n_actual,
+        batch_size=min(2048, len(keys_np)),
+        random_state=seed,
+        max_iter=100,
+        n_init=3
+    )
+    # 在 CPU 上拟合，避免 GPU 显存溢出
+    kmeans.fit(keys_np)
+    # 聚类中心是簇内均值，尚未归一化
+    return kmeans.cluster_centers_
+
+
+def _greedy_compress(keys_np, n_prototypes, seed=42):
+    """Greedy k-Center 压缩（最远点遍历）：贪心选择覆盖最大范围的代表性原型。
+
+    从最接近均值的点开始，每次选择距离已选集合最远的点，直到选满 n_prototypes 个。
+
+    Args:
+        keys_np: (N, D) numpy float32 数组，单类样本特征
+        n_prototypes: 目标原型数量
+        seed: 随机种子（此方法为确定性算法，seed 保留用于接口一致性）
+
+    Returns:
+        (n_prototypes, D) numpy 数组，选中的原型
+    """
+    n_actual = min(n_prototypes, len(keys_np))
+
+    # 从最接近全局均值的点开始（确保起始点具有代表性）
+    mean = keys_np.mean(axis=0)
+    dists_to_mean = np.linalg.norm(keys_np - mean, axis=1)
+    first_idx = int(np.argmin(dists_to_mean))
+
+    selected = [first_idx]
+    # min_dist[i] = 样本 i 到已选集合的最近距离
+    min_dist = np.linalg.norm(keys_np - keys_np[first_idx], axis=1)
+
+    # 贪心选取：每次取 argmax(min_dist) 作为下一个原型
+    for _ in range(1, n_actual):
+        next_idx = int(np.argmax(min_dist))
+        selected.append(next_idx)
+        # 更新各样本到已选集合的最近距离
+        new_dist = np.linalg.norm(keys_np - keys_np[next_idx], axis=1)
+        min_dist = np.minimum(min_dist, new_dist)
+
+    return keys_np[selected]
+
+
+def _herding_compress(keys_np, n_prototypes, seed=42):
+    """Herding 压缩：迭代选择使运行均值逼近全局均值的样本。
+
+    每步选择 <x, t·μ - w_t> 最大的点，其中 μ 为全局均值，w_t 为已选点之和，
+    使得前 t 个原型的均值尽可能接近全部样本的均值。
+
+    Args:
+        keys_np: (N, D) numpy float32 数组，单类样本特征
+        n_prototypes: 目标原型数量
+        seed: 随机种子（此方法为确定性算法，seed 保留用于接口一致性）
+
+    Returns:
+        (n_prototypes, D) numpy 数组，选中的原型
+    """
+    n_actual = min(n_prototypes, len(keys_np))
+
+    # 全局均值 μ
+    mu = keys_np.mean(axis=0)
+    selected = []
+    # w_t = 已选原型的累加和
+    w_t = np.zeros_like(mu)
+
+    # 逐步选取：第 t 步选择使 <x, t·μ - w_t> 最大的样本
+    for t in range(1, n_actual + 1):
+        score = keys_np @ (t * mu - w_t)
+        # 排除已选样本
+        score[selected] = -np.inf
+        idx = int(np.argmax(score))
+        selected.append(idx)
+        w_t += keys_np[idx]
+
+    return keys_np[selected]
+
+
+def compress_memory(cache_keys, cache_values, method='none', n_prototypes=500, device=None):
+    """对记忆库进行类别感知的压缩：正常类和异常类分别压缩。
+
+    论文 ablation 表明 Memory 大幅减少后性能几乎不掉，说明存在大量冗余。
+    本函数将原始记忆库压缩为代表性原型，减少检索开销同时保留判别信息。
+
+    Args:
+        cache_keys: (N, D) tensor — L2 归一化的记忆库 keys
+        cache_values: (N, 2) tensor — one-hot 标签 [normal, anomaly]
+        method: 压缩方法 — 'none'（不压缩）、'kmeans'、'greedy'、'herding'
+        n_prototypes: 每类压缩后的原型数量（如 500 表示正常 500 + 异常 500 = 1000 总计）
+        device: 输出 tensor 的目标设备
+
+    Returns:
+        compressed_keys: (M, D) tensor — 压缩后的 keys
+        compressed_values: (M, 2) tensor — 对应的 one-hot 标签
+    """
+    # 不压缩时直接返回原始记忆库
+    if method == 'none' or method is None:
+        return cache_keys, cache_values
+
+    if device is None:
+        device = cache_keys.device
+
+    # 从 one-hot 标签中提取类别索引：0=正常，1=异常
+    labels = cache_values.argmax(dim=1)
+
+    compressed_keys_list = []
+    compressed_labels_list = []
+
+    # 逐类压缩，保持标签信息
+    for cls in [0, 1]:
+        # 提取当前类的所有样本
+        mask = (labels == cls)
+        cls_keys = cache_keys[mask]
+        n_cls = len(cls_keys)
+
+        # 该类无样本则跳过
+        if n_cls == 0:
+            continue
+
+        # 转换为 CPU numpy 数组进行压缩计算（避免 GPU OOM）
+        cls_keys_np = cls_keys.cpu().numpy().astype(np.float32)
+
+        # 样本数不足时直接保留全部，不压缩
+        if n_cls <= n_prototypes:
+            protos_np = cls_keys_np
+        else:
+            # 根据指定方法进行压缩
+            if method == 'kmeans':
+                protos_np = _kmeans_compress(cls_keys_np, n_prototypes)
+            elif method == 'greedy':
+                protos_np = _greedy_compress(cls_keys_np, n_prototypes)
+            elif method == 'herding':
+                protos_np = _herding_compress(cls_keys_np, n_prototypes)
+            else:
+                raise ValueError(f"未知的压缩方法: {method}，可选: none/kmeans/greedy/herding")
+
+        # 转回 tensor 并 L2 归一化（KMeans 中心是均值，需要重新归一化；
+        # greedy/herding 选取的点本身已归一化，但统一归一化更安全）
+        protos = torch.from_numpy(protos_np).to(dtype=cache_keys.dtype, device=device)
+        protos = protos / protos.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        compressed_keys_list.append(protos)
+        compressed_labels_list.append(
+            torch.full((len(protos),), cls, device=device, dtype=torch.int64)
+        )
+
+    # 所有类均无样本的极端情况，返回原始记忆库
+    if len(compressed_keys_list) == 0:
+        return cache_keys, cache_values
+
+    # 拼接所有类的压缩结果
+    new_keys = torch.cat(compressed_keys_list, dim=0)
+    new_labels = torch.cat(compressed_labels_list, dim=0)
+    new_values = F.one_hot(new_labels, num_classes=2).float()
+
+    print(f"[Memory Compression] method={method}, n_prototypes_per_class={n_prototypes}, "
+          f"original={len(cache_keys)} → compressed={len(new_keys)}")
+
+    return new_keys, new_values
 
 
 # ============================================================
 # build_cache_model: 构建图像级记忆库（正常/异常分类的 keys 和 values）
 # ============================================================
-def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None):
+def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,
+                      device = None, dir=None,
+                      compress_method='none', n_prototypes=500):
     cache_dir = dir
     # --- 分支1: 从头构建记忆库 ---
     if load_cache == False:    
@@ -49,7 +239,7 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
             "values": cache_values
         }
 
-        # 将构建好的记忆库保存到磁盘
+        # 将构建好的完整记忆库保存到磁盘（始终保存未压缩版本，便于不同压缩实验复用）
         torch.save({"keys": cache_keys.cpu(), "values": cache_values.cpu()}, cache_dir)
 
     # --- 分支2: 从磁盘加载已有记忆库 ---
@@ -57,13 +247,27 @@ def build_cache_model(load_cache = False,  clip_model = None, train_loader_cache
         cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
+
+    # --- 记忆库压缩（在构建或加载之后统一应用，on-the-fly 压缩） ---
+    # 磁盘 .pt 文件始终存储完整未压缩记忆库；此处根据参数动态压缩
+    # 支持不同实验复用同一 .pt 文件，只需修改压缩参数即可
+    if compress_method != 'none':
+        cache_keys, cache_values = compress_memory(
+            cache_keys, cache_values,
+            method=compress_method,
+            n_prototypes=n_prototypes,
+            device=device
+        )
+
     return cache_keys, cache_values
 
 
 # ============================================================
 # build_patch_cache_model: 构建 patch 级记忆库（逐样本收集正常/异常 patch 的均值特征）
 # ============================================================
-def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,device = None,dir=None):
+def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader_cache = None,
+                            device = None, dir=None,
+                            compress_method='none', n_prototypes=500):
     cache_dir = dir
     # --- 分支1: 从头构建 patch 级记忆库 ---
     if load_cache == False:    
@@ -129,7 +333,7 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             "values": cache_values
         }
 
-        # 保存 patch 级记忆库到磁盘
+        # 保存完整的 patch 级记忆库到磁盘（始终保存未压缩版本，便于不同压缩实验复用）
         torch.save({"keys": cache_keys.cpu(), "values": cache_values.cpu()}, cache_dir)
 
     # --- 分支2: 从磁盘加载已有 patch 级记忆库 ---
@@ -137,6 +341,18 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
         cache_dict = torch.load(cache_dir, map_location="cpu")
         cache_keys = cache_dict["keys"].to(device)
         cache_values = cache_dict["values"].to(device)
+
+    # --- 记忆库压缩（在构建或加载之后统一应用，on-the-fly 压缩） ---
+    # 与 build_cache_model 一致：磁盘 .pt 文件存储完整未压缩记忆库，
+    # 此处根据参数动态压缩，支持不同实验复用同一 .pt 文件
+    if compress_method != 'none':
+        cache_keys, cache_values = compress_memory(
+            cache_keys, cache_values,
+            method=compress_method,
+            n_prototypes=n_prototypes,
+            device=device
+        )
+
     return cache_keys, cache_values
 
 # ============================================================

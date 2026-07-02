@@ -95,6 +95,8 @@ run_job() {
     --save_path "$job_checkpoint_dir" \
     --cache_dir "$CACHE_DIR" \
     --device "$current_gpu" \
+    --compress_method "$COMPRESS_METHOD" \
+    --n_prototypes "$N_PROTOTYPES" \
     > "$train_log_file" 2>&1
 
   echo "[Task ${iteration}] Training completed"
@@ -110,6 +112,8 @@ run_job() {
     --checkpoint_path "$job_checkpoint_dir/mrad_clip_final.pth" \
     --model_index "$new_idx" \
     --device "$current_gpu" \
+    --compress_method "$COMPRESS_METHOD" \
+    --n_prototypes "$N_PROTOTYPES" \
     > "$test_log_file" 2>&1
 
   echo "[Task ${iteration}] Testing completed"
