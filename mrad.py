@@ -283,7 +283,8 @@ def build_patch_cache_model(load_cache = False,  clip_model = None, train_loader
             for items in tqdm(train_loader_cache):
                 images = items['img'].to(device)
                 labels =  items['anomaly'].to(device)# b
-                gt = items['img_mask'].squeeze().to(device) # b 518 518
+                # 仅压缩通道维度 dim=1，保留 batch 维度，避免 batch_size=1 时维度过度压缩
+                gt = items['img_mask'].squeeze(1).to(device) # b 518 518
                 # 将 ground truth mask 二值化：>0.5 视为异常，<=0.5 视为正常
                 gt[gt > 0.5] = 1
                 gt[gt <= 0.5] = 0

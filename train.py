@@ -151,7 +151,8 @@ def train(args):
             # 将图像、标签和 GT mask 迁移到目标设备
             image = items['img'].to(device)
             label = items['anomaly']
-            gt = items['img_mask'].squeeze().to(device)
+            # 仅压缩通道维度 dim=1，保留 batch 维度，避免 batch_size=1 时维度过度压缩
+            gt = items['img_mask'].squeeze(1).to(device)
             # 将 GT mask 二值化
             gt[gt > 0.5] = 1
             gt[gt <= 0.5] = 0
