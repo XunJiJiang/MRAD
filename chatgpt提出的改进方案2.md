@@ -30,7 +30,7 @@ MRAD最大的特点其实只有三个：
 
 ## 方案一：Memory Compression + Prototype Selection（★★★★★ 推荐）
 
-> 使用 deepseek 尝试修改, 在 Memory-Compression&Prototype-Selection 分支
+> 使用 GLM5.2 尝试修改, 在 Memory-Compression&Prototype-Selection 分支
 
 这是我最推荐的。
 
