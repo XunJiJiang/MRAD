@@ -155,6 +155,8 @@ Memory消融
 
 ## 方案二：Dynamic Memory Update（★★★★★）
 
+> 使用 GLM5.2 尝试修改, 在 Memory-Dynamic-Update 分支
+
 MRAD最大的缺点：
 
 Memory是固定的。
