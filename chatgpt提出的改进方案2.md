@@ -743,6 +743,8 @@ Original Loss
 
 ### 组合二（创新更高）
 
+> 使用 GLM5.2 尝试修改, 在 Multi-scale&Memory-Graph&Contrastive 分支
+
 * **Multi-scale Memory**（6/12/18/24 层联合 Memory）
 * **Graph Memory Refinement**（GAT 更新 Memory）
 * **Contrastive Prototype Loss**（原型对比学习）
